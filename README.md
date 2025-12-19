@@ -24,6 +24,12 @@ We think open data, open source, and open strategy win over proprietary solution
 
 # Pelias OpenStreetMap importer
 
+> **⚠️ Custom Fork Notice**  
+> This is a **custom fork** of [pelias/openstreetmap](https://github.com/pelias/openstreetmap) with OSM admin priority feature.  
+> **Docker Image**: `tiskel/openstreetmap:v1.2`  
+> **See**: [MODIFICATIONS.md](MODIFICATIONS.md) for detailed changes  
+> **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
+
 ## Overview
 
 The OpenStreetMap importer handles importing data from [OpenStreetMap](https://www.openstreetmap.org/) into Elasticsearch for use by Pelias.
