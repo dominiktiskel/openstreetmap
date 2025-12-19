@@ -127,6 +127,42 @@ adminLookup is enabled.  To disable, set `imports.adminLookup.enabled` to `false
 
 **Note:** Admin lookup requires loading around 5GB of data into memory.
 
+#### OSM Administrative Data Priority
+
+**New in this version:** The OpenStreetMap importer now prioritizes administrative data from OSM tags over Who's on First data when available. This provides more accurate and up-to-date location information, especially in regions where OSM data is more current than WOF.
+
+The following OSM address tags are extracted and used to populate the administrative hierarchy:
+
+- `addr:city` → locality (city/town)
+- `addr:state` → region (state/province)
+- `addr:country` → country
+
+**How it works:**
+
+1. During import, OSM admin tags are extracted first
+2. Who's on First admin lookup then fills in any missing fields
+3. OSM data takes precedence and is never overwritten by WOF data
+
+**Example:**
+
+If an OSM record has `addr:city=Kraków` but WOF would assign it to `Nowa Huta` (a district), the importer will use `Kraków` from OSM. However, if the record lacks `addr:state`, WOF will fill in the region automatically.
+
+**Configuration:**
+
+To disable this feature and use only WOF admin lookup (legacy behavior), set in your `pelias.json`:
+
+```json
+{
+  "imports": {
+    "openstreetmap": {
+      "preferOsmAdmin": false
+    }
+  }
+}
+```
+
+By default, `preferOsmAdmin` is `true`.
+
 ## Running an import
 
 This will start the import process. It may take a few minutes to load administrative data and begin processing the OSM PBF file, then you should see regular progress updates in the terminal.

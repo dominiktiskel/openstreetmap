@@ -16,6 +16,7 @@ streams.addressExtractor = require('./address_extractor');
 streams.categoryMapper = require('./category_mapper');
 streams.addendumMapper = require('./addendum_mapper');
 streams.popularityMapper = require('./popularity_mapper');
+streams.osmAdminExtractor = require('./osm_admin_extractor');
 streams.dbMapper = require('pelias-model').createDocumentMapperStream;
 streams.elasticsearch = require('pelias-dbclient');
 
@@ -30,6 +31,7 @@ streams.import = function(){
     .pipe( streams.categoryMapper( categoryDefaults ) )
     .pipe( streams.addendumMapper() )
     .pipe( streams.popularityMapper() )
+    .pipe( streams.osmAdminExtractor() )  // Extract admin data from OSM tags before WOF lookup
     .pipe( streams.adminLookup() )
     .pipe( streams.dbMapper() )
     .pipe( streams.elasticsearch({name: 'openstreetmap'}) );

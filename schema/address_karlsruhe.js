@@ -17,6 +17,8 @@ const KARLSRUHE_SCHEMA = {
   'addr:postcode':      'zip'
 
   // @ref: https://github.com/pelias/model/pull/13
+  // Note: addr:city, addr:state, addr:country are handled by osm_admin_extractor.js
+  // which properly sets them in the parent hierarchy (not address_parts)
   // 'addr:state':         'state',
   // 'addr:city':          'city',
   // 'addr:country':       'country'

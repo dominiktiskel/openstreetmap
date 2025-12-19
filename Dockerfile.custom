@@ -1,0 +1,37 @@
+# Custom Dockerfile for tiskel/openstreetmap with modified wof-admin-lookup
+# This version uses a local copy of wof-admin-lookup with OSM admin priority
+
+# base image
+FROM pelias/baseimage
+
+# downloader apt dependencies
+RUN apt-get update && apt-get install -y bzip2 unzip && rm -rf /var/lib/apt/lists/*
+
+# Setup directory structure
+ENV WORKDIR /code/pelias/openstreetmap
+WORKDIR /code/pelias
+
+# Copy and install modified wof-admin-lookup first
+COPY wof-admin-lookup /code/pelias/wof-admin-lookup
+WORKDIR /code/pelias/wof-admin-lookup
+RUN npm install
+
+# Now setup openstreetmap
+WORKDIR ${WORKDIR}
+
+# Copy package.json first
+COPY openstreetmap/package.json ${WORKDIR}/package.json
+
+# Install dependencies
+RUN npm install
+
+# Link local wof-admin-lookup (overwrite the npm version)
+RUN rm -rf node_modules/pelias-wof-admin-lookup && \
+    ln -s /code/pelias/wof-admin-lookup node_modules/pelias-wof-admin-lookup
+
+# Add all openstreetmap code (including bin/, stream/, etc.)
+COPY openstreetmap ${WORKDIR}
+
+# Run as the pelias user
+USER pelias
+

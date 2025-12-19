@@ -1,9 +1,9 @@
-/node_modules/
-esclient.log
+node_modules/
+npm-debug.log*
+.npm
+data/
 *.log
-nohup.out
-test/*.pbf
-coverage
-
-actual_output.json
-expected_output.json
+.DS_Store
+Thumbs.db
+coverage/
+.nyc_output/
