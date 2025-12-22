@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.6.1
+## Version: v1.7.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.6.1`
+- **Docker Image**: `tiskel/openstreetmap:v1.7.0`
 
 ## Key Features
 
@@ -400,6 +400,150 @@ docker push tiskel/openstreetmap:v1.4.1
 
 ## Changelog
 
+### v1.7.0 (2025-12-22)
+
+**⚠️ BREAKING CHANGE: Geographic-based street key aggregation**
+
+- 🔄 **BREAKING**: Street aggregation key changed from `street|locality|region|country` to `street|locality|lat|lon`
+- 📍 **NEW**: Uses coordinates rounded to 1 decimal place (~11km precision) for geographic uniqueness
+- ✅ **FIX**: Streets with same name in different locations now properly separated even when OSM lacks `addr:state`
+- ⭐ **FIX**: Street documents now get full WOF hierarchy (region, county, country, localadmin)
+- 🔧 **CHANGE**: Moved `streetGenerator` before `adminLookup` in pipeline
+- 🗑️ **REMOVED**: `region` and `country` fields from LevelDB aggregate (WOF provides full hierarchy)
+- 🧪 **UPDATED**: All tests updated for new key format
+- ♻️ **COMPATIBLE**: Automatically handles old v1.6.x data format during migration
+
+**Root Cause:**
+
+Previous key format relied on `addr:state` and `addr:country` OSM tags which are often missing. This caused streets with the same name in different places to be merged incorrectly:
+- Key: `"akacjowa|zacharzyce||"` (two empty fields = ambiguous!)
+- Result: All "Akacjowa, Zacharzyce" streets combined regardless of location
+
+**New Solution:**
+
+Geographic coordinates are ALWAYS available and provide reliable separation:
+- Key: `"akacjowa|zacharzyce|51.0|17.1"` (unique per location!)
+- Precision: 0.1° ≈ 11km (perfect for distinguishing different towns/districts)
+
+**Before (v1.6.2):**
+```json
+{
+  "id": "street_akacjowa_zacharzyce__",
+  "name": "Akacjowa",
+  "locality": "Zacharzyce",
+  "label": "Akacjowa, Zacharzyce"
+  // Missing: region, county, country (no WOF hierarchy)
+}
+```
+
+**After (v1.7.0):**
+```json
+{
+  "id": "street_akacjowa_zacharzyce_51.0_17.1",
+  "name": "Akacjowa",
+  "locality": "Zacharzyce",
+  "region": "dolnośląskie",
+  "county": "Trzebnicki",
+  "country": "Polska",
+  "country_code": "PL",
+  "label": "Akacjowa, Zacharzyce, DS, Polska"
+  // Full WOF hierarchy included! ✅
+}
+```
+
+**LevelDB Structure Change:**
+
+Key format:
+```
+BEFORE: "akacjowa|zacharzyce||" 
+AFTER:  "akacjowa|zacharzyce|51.0|17.1"
+```
+
+Value structure:
+```json
+{
+  "numbers": ["1", "2", "3"],
+  "centroid": { "lat": 153.0, "lon": 51.1, "count": 3 },
+  "streetName": "Akacjowa",
+  "locality": "Zacharzyce"
+  // REMOVED: region, country (WOF will provide)
+}
+```
+
+**Pipeline Change:**
+
+```javascript
+// BEFORE (v1.6.2):
+.pipe( osmAdminExtractor() )
+.pipe( adminLookup() )         // WOF only for addresses
+.pipe( streetGenerator() )     // Streets miss WOF ❌
+.pipe( dbMapper() )
+
+// AFTER (v1.7.0):
+.pipe( osmAdminExtractor() )
+.pipe( streetGenerator() )     // Generate streets early
+.pipe( adminLookup() )         // WOF for addresses + streets ✅
+.pipe( dbMapper() )
+```
+
+**Migration Required:**
+
+⚠️ This is a **BREAKING CHANGE** - full reimport required:
+
+```bash
+pelias compose pull openstreetmap
+pelias compose down
+pelias elastic drop
+pelias elastic create
+pelias import osm
+```
+
+**Benefits:**
+- ✅ Reliable geographic separation (coordinates always available)
+- ✅ Streets get full WOF admin hierarchy (same as addresses)
+- ✅ Simpler data model (no manual admin field management)
+- ✅ Works correctly even with incomplete OSM tagging
+- ✅ ~11km precision perfect for Poland's administrative divisions
+
+### v1.6.2 (2025-12-22)
+
+**🐛 FIX: Street names now preserve original capitalization**
+
+- 🐛 **FIXED**: Street document names now use original capitalization (e.g., "Akacjowa" instead of "akacjowa")
+- ✨ LevelDB aggregate now stores `streetName` field with original capitalization
+- 🔧 Backward compatible: Falls back to key parsing for old data
+- 📝 Improved street document quality and searchability
+
+**Root cause**: Street names were taken from LevelDB key which is lowercase (`generateStreetKey()` converts to lowercase for deduplication).
+
+**Solution**: Store original street name in aggregate structure:
+```javascript
+aggregate = {
+  numbers: [...],
+  centroid: { lat: 0, lon: 0, count: 0 },
+  streetName: "Akacjowa",  // Original capitalization
+  locality: "Zacharzyce",
+  region: "dolnoslaskie",
+  country: "PL"
+}
+```
+
+**Before (v1.6.1):**
+```json
+{
+  "name": "akacjowa",
+  "label": "akacjowa, Bielany Wrocławskie"
+}
+```
+
+**After (v1.6.2):**
+```json
+{
+  "name": "Akacjowa",
+  "label": "Akacjowa, Bielany Wrocławskie"
+}
+```
+
 ### v1.6.1 (2025-12-22)
 
 **🐛 HOTFIX: Fixed LevelDB iterator API for street generation**
@@ -449,7 +593,7 @@ Before (v1.5.x):
 ["1", "2", "3", "10", "22a"]
 ```
 
-After (v1.6.0):
+After (v1.7.0):
 ```json
 {
   "numbers": ["1", "2", "3", "10", "22a"],
@@ -458,11 +602,12 @@ After (v1.6.0):
     "lon": 17.0945,
     "count": 5
   },
-  "locality": "Zacharzyce",
-  "region": "dolnoslaskie",
-  "country": "PL"
+  "streetName": "Akacjowa",
+  "locality": "Zacharzyce"
 }
 ```
+
+Note: `region` and `country` removed - WOF lookup provides full admin hierarchy.
 
 **Example Street Document**:
 

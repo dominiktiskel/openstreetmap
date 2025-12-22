@@ -66,13 +66,13 @@ function populateTestDb(data, callback) {
 // Test: Street generator creates correct street document
 tape('street_generator: generates street document with correct properties', (test) => {
   const testData = [{
-    key: 'testowa|warszawa|mazowieckie|polska',
+    key: 'testowa|warszawa|50.0|19.0',  // New format: street|locality|lat|lon
     value: {
       numbers: ['1', '2', '3', '10', '22a'],
       centroid: { lat: 150.0, lon: 57.0, count: 3 }, // sum, not average
-      locality: 'Warszawa',
-      region: 'mazowieckie',
-      country: 'Polska'
+      streetName: 'Testowa',
+      locality: 'Warszawa'
+      // Note: region/country removed - will be added by WOF lookup
     }
   }];
 
@@ -117,23 +117,21 @@ tape('street_generator: generates street document with correct properties', (tes
 tape('street_generator: generates multiple street documents', (test) => {
   const testData = [
     {
-      key: 'akacjowa|zacharzyce|dolnoslaskie|polska',
+      key: 'akacjowa|zacharzyce|51.0|17.1',  // Coordinates for geographic separation
       value: {
         numbers: ['1', '2', '3'],
         centroid: { lat: 153.0, lon: 51.3, count: 3 },
-        locality: 'Zacharzyce',
-        region: 'dolnoslaskie',
-        country: 'Polska'
+        streetName: 'Akacjowa',
+        locality: 'Zacharzyce'
       }
     },
     {
-      key: 'akacjowa|ślęza|dolnoslaskie|polska',
+      key: 'akacjowa|ślęza|51.0|17.0',  // Different coordinates = different street
       value: {
         numbers: ['4', '5', '6'],
         centroid: { lat: 102.0, lon: 34.0, count: 2 },
-        locality: 'Ślęza',
-        region: 'dolnoslaskie',
-        country: 'Polska'
+        streetName: 'Akacjowa',
+        locality: 'Ślęza'
       }
     }
   ];
@@ -174,13 +172,12 @@ tape('street_generator: generates multiple street documents', (test) => {
 // Test: Street generator with single address
 tape('street_generator: handles street with single address', (test) => {
   const testData = [{
-    key: 'polna|wrocław|dolnoslaskie|polska',
+    key: 'polna|wrocław|51.1|17.0',
     value: {
       numbers: ['42'],
       centroid: { lat: 51.1079, lon: 17.0385, count: 1 },
-      locality: 'Wrocław',
-      region: 'dolnoslaskie',
-      country: 'Polska'
+      streetName: 'Polna',
+      locality: 'Wrocław'
     }
   }];
 
@@ -219,17 +216,16 @@ tape('street_generator: handles street with single address', (test) => {
 tape('street_generator: skips streets in old array format', (test) => {
   const testData = [
     {
-      key: 'testowa|warszawa|mazowieckie|polska',
+      key: 'testowa|warszawa|50.0|20.0',  // Old array format with new key style
       value: ['1', '2', '3'] // Old array format (v1.5.x)
     },
     {
-      key: 'nowa|warszawa|mazowieckie|polska',
+      key: 'nowa|warszawa|50.0|21.0',
       value: {
         numbers: ['4', '5'],
         centroid: { lat: 100.0, lon: 40.0, count: 2 },
-        locality: 'Warszawa',
-        region: 'mazowieckie',
-        country: 'Polska'
+        streetName: 'Nowa',
+        locality: 'Warszawa'
       }
     }
   ];
@@ -262,23 +258,21 @@ tape('street_generator: skips streets in old array format', (test) => {
 tape('street_generator: skips streets without centroid data', (test) => {
   const testData = [
     {
-      key: 'badstreet|city|region|country',
+      key: 'badstreet|city|50.0|20.0',
       value: {
         numbers: ['1', '2'],
         centroid: { lat: 0, lon: 0, count: 0 }, // No centroid data
-        locality: 'City',
-        region: 'Region',
-        country: 'Country'
+        streetName: 'Badstreet',
+        locality: 'City'
       }
     },
     {
-      key: 'goodstreet|city|region|country',
+      key: 'goodstreet|city|50.0|20.0',
       value: {
         numbers: ['3', '4'],
         centroid: { lat: 50.0, lon: 20.0, count: 1 },
-        locality: 'City',
-        region: 'Region',
-        country: 'Country'
+        streetName: 'Goodstreet',
+        locality: 'City'
       }
     }
   ];
@@ -310,13 +304,12 @@ tape('street_generator: skips streets without centroid data', (test) => {
 // Test: Street generator passes through input documents unchanged
 tape('street_generator: passes through input documents unchanged', (test) => {
   const testData = [{
-    key: 'testowa|warszawa|mazowieckie|polska',
+    key: 'testowa|warszawa|50.0|20.0',
     value: {
       numbers: ['1', '2'],
       centroid: { lat: 100.0, lon: 40.0, count: 2 },
-      locality: 'Warszawa',
-      region: 'mazowieckie',
-      country: 'Polska'
+      streetName: 'Testowa',
+      locality: 'Warszawa'
     }
   }];
 
@@ -357,13 +350,12 @@ tape('street_generator: passes through input documents unchanged', (test) => {
 // Test: Street generator with natural-sorted complex numbers
 tape('street_generator: maintains natural sort of complex house numbers', (test) => {
   const testData = [{
-    key: 'testowa|warszawa|mazowieckie|polska',
+    key: 'testowa|warszawa|50.0|20.0',
     value: {
       numbers: ['1', '2', '10', '22', '22a', '22b', '100'], // Pre-sorted by collector
       centroid: { lat: 150.0, lon: 60.0, count: 3 },
-      locality: 'Warszawa',
-      region: 'mazowieckie',
-      country: 'Polska'
+      streetName: 'Testowa',
+      locality: 'Warszawa'
     }
   }];
 

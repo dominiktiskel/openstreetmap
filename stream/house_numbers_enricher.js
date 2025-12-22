@@ -24,22 +24,27 @@ const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateH
 const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation');
 
 /**
- * Generate a unique key for a street based on its full administrative hierarchy.
+ * Generate a unique key for a street based on locality and geographic coordinates.
  * Same function as in collector for consistency.
+ * Format: "street|locality|lat|lon"
  * 
- * NOTE: In Pass 2, we have parent hierarchy from WOF lookup, but we prioritize
- * OSM tags (addr:city, addr:state, addr:country) to match the keys from Pass 1.
+ * MUST generate identical keys as collector to successfully retrieve aggregated data.
+ * Uses coordinates rounded to 1 decimal place (~11km precision) to ensure proper
+ * geographic separation of streets in different locations.
  */
 function generateStreetKey(doc) {
   const street = doc.getAddress('street') || '';
   
-  // Use same logic as collector: OSM tags first, then parent hierarchy
+  // Get locality from OSM tags first (same as collector)
   const tags = doc.getMeta('tags') || {};
   const locality = tags['addr:city'] || _.get(doc, 'parent.locality[0]', '');
-  const region = tags['addr:state'] || _.get(doc, 'parent.region[0]', '');
-  const country = tags['addr:country'] || _.get(doc, 'parent.country[0]', '');
   
-  return [street, locality, region, country]
+  // Get centroid and round to 1 decimal place (~11km precision)
+  const centroid = doc.getCentroid();
+  const lat = centroid && centroid.lat ? centroid.lat.toFixed(1) : '0.0';
+  const lon = centroid && centroid.lon ? centroid.lon.toFixed(1) : '0.0';
+  
+  return [street, locality, lat, lon]
     .map(s => String(s).trim().toLowerCase())
     .join('|');
 }

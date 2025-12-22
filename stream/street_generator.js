@@ -89,8 +89,8 @@ module.exports = function() {
                 continue;
               }
 
-              // Parse street key
-              const [streetName, locality, region, country] = key.split('|');
+              // Get original street name with proper capitalization from aggregate
+              const streetName = aggregate.streetName || key.split('|')[0];
               
               if (!streetName) {
                 peliasLogger.debug('[street_generator] Skipping street (no name): %s', key);
@@ -101,10 +101,10 @@ module.exports = function() {
               const avgLat = aggregate.centroid.lat / aggregate.centroid.count;
               const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
 
-              // Generate unique ID for street
+              // Generate unique ID for street (use lowercase key for consistency)
               const streetId = `street_${key.replace(/\|/g, '_')}`;
 
-              // Create street document
+              // Create street document with original capitalized street name
               const streetDoc = new Document('openstreetmap', 'street', streetId)
                 .setName('default', streetName)
                 .setCentroid({ lat: avgLat, lon: avgLon });
@@ -115,16 +115,11 @@ module.exports = function() {
               });
 
               // Add parent hierarchy
-              // Note: We use the raw values from aggregate (which came from OSM tags)
-              // These will be enriched by admin lookup downstream
+              // Note: Only locality is stored in aggregate (from OSM tags).
+              // Full WOF hierarchy (region, county, country, localadmin, etc.) will be
+              // added by adminLookup() downstream when street documents pass through the pipeline.
               if (aggregate.locality) {
                 streetDoc.addParent('locality', aggregate.locality, `osm:locality:${aggregate.locality.toLowerCase()}`);
-              }
-              if (aggregate.region) {
-                streetDoc.addParent('region', aggregate.region, `osm:region:${aggregate.region.toLowerCase()}`);
-              }
-              if (aggregate.country) {
-                streetDoc.addParent('country', aggregate.country, `osm:country:${aggregate.country.toLowerCase()}`);
               }
 
               // Push street document to pipeline

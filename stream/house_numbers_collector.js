@@ -25,23 +25,26 @@ const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateH
 const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation');
 
 /**
- * Generate a unique key for a street based on its full administrative hierarchy.
- * Format: "street|locality|region|country"
+ * Generate a unique key for a street based on locality and geographic coordinates.
+ * Format: "street|locality|lat|lon"
  * 
- * NOTE: In Pass 1, parent hierarchy is not yet populated (added by WOF lookup in Pass 2).
- * So we read directly from OSM tags (addr:city, addr:state, addr:country) which are
- * available immediately from the raw OSM data.
+ * Uses coordinates rounded to 1 decimal place (~11km precision) to ensure proper
+ * geographic separation of streets in different locations, even when admin data
+ * (region/country) is missing from OSM tags.
  */
 function generateStreetKey(doc) {
   const street = doc.getAddress('street') || '';
   
-  // Try to get admin data from OSM tags first (available in Pass 1)
+  // Get locality from OSM tags first (available in Pass 1)
   const tags = doc.getMeta('tags') || {};
   const locality = tags['addr:city'] || _.get(doc, 'parent.locality[0]', '');
-  const region = tags['addr:state'] || _.get(doc, 'parent.region[0]', '');
-  const country = tags['addr:country'] || _.get(doc, 'parent.country[0]', '');
   
-  return [street, locality, region, country]
+  // Get centroid and round to 1 decimal place (~11km precision)
+  const centroid = doc.getCentroid();
+  const lat = centroid && centroid.lat ? centroid.lat.toFixed(1) : '0.0';
+  const lon = centroid && centroid.lon ? centroid.lon.toFixed(1) : '0.0';
+  
+  return [street, locality, lat, lon]
     .map(s => String(s).trim().toLowerCase())
     .join('|');
 }
@@ -120,9 +123,9 @@ module.exports = function() {
                 aggregate = {
                   numbers: [],
                   centroid: { lat: 0, lon: 0, count: 0 },
-                  locality: tags['addr:city'] || '',
-                  region: tags['addr:state'] || '',
-                  country: tags['addr:country'] || ''
+                  streetName: doc.getAddress('street') || '', // Store original street name with capitalization
+                  locality: tags['addr:city'] || ''
+                  // Note: region/country removed - WOF lookup will add full hierarchy to street documents
                 };
                 streetCount++;
               } else if (err) {
@@ -137,12 +140,18 @@ module.exports = function() {
                   aggregate = {
                     numbers: data,
                     centroid: { lat: 0, lon: 0, count: 0 },
-                    locality: tags['addr:city'] || '',
-                    region: tags['addr:state'] || '',
-                    country: tags['addr:country'] || ''
+                    streetName: doc.getAddress('street') || '',
+                    locality: tags['addr:city'] || ''
                   };
                 } else {
                   aggregate = data;
+                  // Ensure streetName exists (for backward compatibility with v1.6.x)
+                  if (!aggregate.streetName) {
+                    aggregate.streetName = doc.getAddress('street') || '';
+                  }
+                  // Remove deprecated fields (for backward compatibility with v1.6.x)
+                  delete aggregate.region;
+                  delete aggregate.country;
                 }
               }
               
@@ -164,12 +173,7 @@ module.exports = function() {
               if (!aggregate.locality && tags['addr:city']) {
                 aggregate.locality = tags['addr:city'];
               }
-              if (!aggregate.region && tags['addr:state']) {
-                aggregate.region = tags['addr:state'];
-              }
-              if (!aggregate.country && tags['addr:country']) {
-                aggregate.country = tags['addr:country'];
-              }
+              // Note: region/country no longer stored - WOF lookup will provide full hierarchy
               
               // Save to database
               db.put(streetKey, aggregate, (putErr) => {

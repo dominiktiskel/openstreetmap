@@ -79,19 +79,21 @@ tape('collector: naturalSort handles mixed formats', (test) => {
 });
 
 // Test generateStreetKey function
-tape('collector: generateStreetKey generates correct key with full hierarchy', (test) => {
+tape('collector: generateStreetKey generates correct key with locality and coordinates', (test) => {
   const doc = createAddressDoc('1', '5', 'Marszałkowska', 'Warszawa', 'mazowieckie', 'Polska');
   const key = houseNumbersCollector.generateStreetKey(doc);
   
-  test.equal(key, 'marszałkowska|warszawa|mazowieckie|polska', 'key generated correctly');
+  // New format: street|locality|lat|lon (coordinates rounded to 1 decimal)
+  test.equal(key, 'marszałkowska|warszawa|50.0|19.0', 'key generated correctly with coordinates');
   test.end();
 });
 
-tape('collector: generateStreetKey handles missing hierarchy', (test) => {
+tape('collector: generateStreetKey handles missing locality', (test) => {
   const doc = createAddressDoc('1', '5', 'Main Street', '', '', '');
   const key = houseNumbersCollector.generateStreetKey(doc);
   
-  test.equal(key, 'main street|||', 'handles missing data');
+  // Even without locality, coordinates provide uniqueness
+  test.equal(key, 'main street||50.0|19.0', 'handles missing locality but includes coordinates');
   test.end();
 });
 

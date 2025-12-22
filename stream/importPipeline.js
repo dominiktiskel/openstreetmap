@@ -80,8 +80,8 @@ streams.importPass2 = function(){
     .pipe( streams.addendumMapper() )
     .pipe( streams.popularityMapper() )
     .pipe( streams.osmAdminExtractor() )  // Extract admin data from OSM tags before WOF lookup
-    .pipe( streams.adminLookup() )
-    .pipe( streams.streetGenerator() )  // Generate street documents from LevelDB
+    .pipe( streams.streetGenerator() )  // Generate street documents from LevelDB (before adminLookup!)
+    .pipe( streams.adminLookup() )  // WOF lookup for BOTH addresses AND streets
     .pipe( streams.dbMapper() )
     .pipe( streams.elasticsearch({name: 'openstreetmap'}) );
 };
