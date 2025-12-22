@@ -16,6 +16,17 @@ function createAddressDoc(id, houseNumber, street, locality, region, country) {
     .setAddress('street', street)
     .setCentroid({ lat: 50.0, lon: 19.0 });
 
+  // Set OSM tags (needed for Pass 1 collector to generate correct keys)
+  const tags = {
+    'addr:housenumber': houseNumber,
+    'addr:street': street
+  };
+  if (locality) tags['addr:city'] = locality;
+  if (region) tags['addr:state'] = region;
+  if (country) tags['addr:country'] = country;
+  doc.setMeta('tags', tags);
+
+  // Also set parent hierarchy (for Pass 2 fallback)
   if (locality) doc.parent.locality = [locality];
   if (region) doc.parent.region = [region];
   if (country) doc.parent.country = [country];

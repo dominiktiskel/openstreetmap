@@ -19,6 +19,7 @@ streams.adminLookup = require('pelias-wof-admin-lookup').create;
 streams.addressExtractor = require('./address_extractor');
 streams.houseNumbersCollector = require('./house_numbers_collector');
 streams.houseNumbersEnricher = require('./house_numbers_enricher');
+streams.streetGenerator = require('./street_generator');
 streams.categoryMapper = require('./category_mapper');
 streams.addendumMapper = require('./addendum_mapper');
 streams.popularityMapper = require('./popularity_mapper');
@@ -80,6 +81,7 @@ streams.importPass2 = function(){
     .pipe( streams.popularityMapper() )
     .pipe( streams.osmAdminExtractor() )  // Extract admin data from OSM tags before WOF lookup
     .pipe( streams.adminLookup() )
+    .pipe( streams.streetGenerator() )  // Generate street documents from LevelDB
     .pipe( streams.dbMapper() )
     .pipe( streams.elasticsearch({name: 'openstreetmap'}) );
 };

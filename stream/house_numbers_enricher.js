@@ -26,12 +26,18 @@ const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation')
 /**
  * Generate a unique key for a street based on its full administrative hierarchy.
  * Same function as in collector for consistency.
+ * 
+ * NOTE: In Pass 2, we have parent hierarchy from WOF lookup, but we prioritize
+ * OSM tags (addr:city, addr:state, addr:country) to match the keys from Pass 1.
  */
 function generateStreetKey(doc) {
   const street = doc.getAddress('street') || '';
-  const locality = _.get(doc, 'parent.locality[0]', '');
-  const region = _.get(doc, 'parent.region[0]', '');
-  const country = _.get(doc, 'parent.country[0]', '');
+  
+  // Use same logic as collector: OSM tags first, then parent hierarchy
+  const tags = doc.getMeta('tags') || {};
+  const locality = tags['addr:city'] || _.get(doc, 'parent.locality[0]', '');
+  const region = tags['addr:state'] || _.get(doc, 'parent.region[0]', '');
+  const country = tags['addr:country'] || _.get(doc, 'parent.country[0]', '');
   
   return [street, locality, region, country]
     .map(s => String(s).trim().toLowerCase())
@@ -77,26 +83,31 @@ module.exports = function() {
           const streetKey = generateStreetKey(doc);
           
           // Read from LevelDB
-          db.get(streetKey, (err, numbers) => {
+          db.get(streetKey, (err, value) => {
             if (err) {
               if (!err.notFound) {
                 peliasLogger.error('[house_numbers_enricher] LevelDB read error:', err);
               }
               missedCount++;
-            } else if (numbers && numbers.length > 0) {
-              // Add addendum
-              const existingAddendum = doc.getAddendum('osm') || {};
-              existingAddendum.house_numbers = numbers.join(',');
-              doc.setAddendum('osm', existingAddendum);
-              enrichedCount++;
+            } else if (value) {
+              // Handle both old array format (v1.5.x) and new object format (v1.6.0+)
+              const numbers = Array.isArray(value) ? value : value.numbers;
+              
+              if (numbers && numbers.length > 0) {
+                // Add addendum
+                const existingAddendum = doc.getAddendum('osm') || {};
+                existingAddendum.house_numbers = numbers.join(',');
+                doc.setAddendum('osm', existingAddendum);
+                enrichedCount++;
 
-              // Log progress every 10K documents
-              if (enrichedCount % 10000 === 0) {
-                peliasLogger.info(
-                  '[house_numbers_enricher] Enriched %d addresses (%d not found)',
-                  enrichedCount,
-                  missedCount
-                );
+                // Log progress every 10K documents
+                if (enrichedCount % 10000 === 0) {
+                  peliasLogger.info(
+                    '[house_numbers_enricher] Enriched %d addresses (%d not found)',
+                    enrichedCount,
+                    missedCount
+                  );
+                }
               }
             }
             
@@ -116,7 +127,7 @@ module.exports = function() {
       return next();
     },
     
-    // Flush function - close and cleanup database
+    // Flush function - close database (cleanup happens in street_generator)
     function(done) {
       if (!enabled || !dbExists) {
         return done();
@@ -132,19 +143,9 @@ module.exports = function() {
         db.close((err) => {
           if (err) {
             peliasLogger.error('[house_numbers_enricher] Error closing database:', err);
+          } else {
+            peliasLogger.info('[house_numbers_enricher] Database closed (will be cleaned up by street_generator)');
           }
-
-          // Cleanup database
-          if (fs.existsSync(DB_PATH)) {
-            try {
-              fs.rmSync(DB_PATH, { recursive: true, force: true });
-              peliasLogger.info('[house_numbers_enricher] Cleaned up LevelDB successfully');
-            } catch (cleanupErr) {
-              peliasLogger.warn('[house_numbers_enricher] Could not cleanup LevelDB:', cleanupErr.message);
-              peliasLogger.warn('[house_numbers_enricher] Manual cleanup may be needed: %s', DB_PATH);
-            }
-          }
-
           done();
         });
       } else {

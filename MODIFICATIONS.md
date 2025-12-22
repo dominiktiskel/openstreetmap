@@ -2,18 +2,68 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.5.1
+## Version: v1.6.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.5.1`
+- **Docker Image**: `tiskel/openstreetmap:v1.6.0`
 
 ## Key Features
 
-### 1. House Numbers Aggregation (`aggregateHouseNumbers`)
+### 1. Street Documents Import (`importStreets`) ⭐ NEW in v1.6.0
+
+**Feature**: Automatic generation of street-level documents with aggregated house numbers
+
+In addition to importing individual addresses, the importer now creates separate `layer: 'street'` documents for each unique street. Each street document includes:
+
+- **Centroid**: Average coordinates of all addresses on that street
+- **House Numbers**: Complete list of all available house numbers
+- **Admin Hierarchy**: Locality, region, and country information
+- **Unique per locality**: Same street name in different cities = separate documents
+
+**Benefits**:
+- ✅ **Street-level search**: Search for "Marszałkowska, Warszawa" returns the street itself
+- ✅ **Quick overview**: See all house numbers on a street at a glance
+- ✅ **Better UX**: Users can find streets without knowing specific house numbers
+- ✅ **No extra cost**: Uses existing LevelDB data, zero additional RAM
+- ✅ **Accurate location**: Centroid calculated from real address coordinates
+
+**Example Output**:
+
+```json
+{
+  "layer": "street",
+  "name": "Akacjowa",
+  "center_point": { "lat": 51.0440, "lon": 17.0945 },
+  "parent": {
+    "locality": ["Zacharzyce"],
+    "region": ["dolnoslaskie"],
+    "country": ["Polska"]
+  },
+  "addendum": {
+    "osm": {
+      "house_numbers": "1,2,3,4,5,6,7,8,9,10,..."
+    }
+  }
+}
+```
+
+**Configuration**:
+
+```json
+{
+  "imports": {
+    "openstreetmap": {
+      "importStreets": true
+    }
+  }
+}
+```
+
+### 2. House Numbers Aggregation (`aggregateHouseNumbers`)
 
 **Feature**: Memory-efficient streaming aggregation of house numbers per street using LevelDB
 
@@ -73,7 +123,7 @@ In `pelias.json`:
 
 Set to `false` to disable house number aggregation.
 
-### 2. OSM Admin Priority (`preferOsmAdmin`)
+### 3. OSM Admin Priority (`preferOsmAdmin`)
 
 **New Configuration Option**: `imports.openstreetmap.preferOsmAdmin`
 
@@ -85,29 +135,57 @@ When enabled (default: `true`), the importer prioritizes administrative data fro
 - Better handling of recent administrative changes
 - WOF still used as fallback for missing fields
 
-### 3. Modified Files
+### 4. Modified Files
 
-#### `stream/house_numbers_collector.js` ⭐ NEW FILE (v1.4.0)
+#### `stream/street_generator.js` ⭐ NEW FILE (v1.6.0)
 
-**Pass 1** of streaming aggregation - collects house numbers to LevelDB:
+**Street document generation** - creates street-level documents from LevelDB aggregates:
+- Runs in flush phase after all addresses processed
+- Reads aggregated data from LevelDB
+- Calculates average centroid from accumulated coordinates
+- Creates `layer: 'street'` documents with house numbers list
+- Includes parent hierarchy (locality, region, country)
+- Cleans up LevelDB after completion
+- Configurable via `imports.openstreetmap.importStreets`
+
+#### `stream/house_numbers_collector.js` (v1.4.0, updated v1.6.0)
+
+**Pass 1** of streaming aggregation - collects house numbers AND coordinates to LevelDB:
 - Streams address documents without buffering in RAM
-- Writes to LevelDB: `streetKey → sorted array of numbers`
-- Uses Set for automatic duplicate removal
+- Writes to LevelDB: `streetKey → { numbers, centroid, locality, region, country }`
+- Accumulates coordinates (lat, lon, count) for centroid calculation
+- Uses Set for automatic duplicate removal of house numbers
 - Natural sorting algorithm applied during collection
+- Stores admin data from OSM tags for later use
 - Minimal memory footprint (~100-200 MB regardless of dataset size)
 - Detailed logging of collection progress
+- Backward compatible with v1.5.x array format
 
-**Key Code**:
+**Key Code** (v1.6.0):
 ```javascript
 // LevelDB storage with JSON encoding
-const db = level(DB_PATH, { valueEncoding: 'json' });
+const db = new Level(DB_PATH, { valueEncoding: 'json' });
 
-// Collect and sort in streaming fashion
-db.get(streetKey, (err, numbers) => {
-  const numbersSet = err ? new Set() : new Set(numbers);
+// Collect numbers AND coordinates in streaming fashion
+db.get(streetKey, (err, data) => {
+  let aggregate = data || {
+    numbers: [],
+    centroid: { lat: 0, lon: 0, count: 0 },
+    locality: '', region: '', country: ''
+  };
+  
+  // Add house number
+  const numbersSet = new Set(aggregate.numbers);
   numbersSet.add(houseNumber);
-  const sorted = Array.from(numbersSet).sort(naturalSort);
-  db.put(streetKey, sorted);
+  aggregate.numbers = Array.from(numbersSet).sort(naturalSort);
+  
+  // Accumulate coordinates
+  const centroid = doc.getCentroid();
+  aggregate.centroid.lat += centroid.lat;
+  aggregate.centroid.lon += centroid.lon;
+  aggregate.centroid.count++;
+  
+  db.put(streetKey, aggregate);
 });
 ```
 
@@ -321,6 +399,122 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.6.0 (2025-12-22)
+
+**✨ NEW FEATURE: Street Documents Import**
+
+- ✨ **NEW**: Importer now generates `layer: 'street'` documents in addition to address documents
+- 📍 **Centroid Calculation**: Each street gets a centroid calculated as average of all address coordinates
+- 🏘️ **Admin Hierarchy**: Streets inherit locality/region/country from their addresses
+- 📊 **House Numbers List**: Streets include all available house numbers in addendum
+- 🔧 **Configurable**: Can be disabled with `imports.openstreetmap.importStreets: false`
+- 💾 **Zero Extra RAM**: Uses existing LevelDB infrastructure, no additional memory needed
+- ⚡ **Flush Phase**: Streets generated after all addresses processed, minimal performance impact
+
+**New Files**:
+- `stream/street_generator.js` - Generates street documents from LevelDB aggregates
+- `test/stream/street_generator.js` - Comprehensive test suite
+
+**Modified Files**:
+- `stream/house_numbers_collector.js` - Extended to accumulate coordinates and admin data
+- `stream/house_numbers_enricher.js` - Updated for new LevelDB structure (backward compatible)
+- `stream/importPipeline.js` - Integrated street_generator into Pass 2
+
+**LevelDB Structure Change**:
+
+Before (v1.5.x):
+```json
+["1", "2", "3", "10", "22a"]
+```
+
+After (v1.6.0):
+```json
+{
+  "numbers": ["1", "2", "3", "10", "22a"],
+  "centroid": {
+    "lat": 51.0440,
+    "lon": 17.0945,
+    "count": 5
+  },
+  "locality": "Zacharzyce",
+  "region": "dolnoslaskie",
+  "country": "PL"
+}
+```
+
+**Example Street Document**:
+
+```json
+{
+  "layer": "street",
+  "source": "openstreetmap",
+  "name": {
+    "default": "Akacjowa"
+  },
+  "center_point": {
+    "lat": 51.0440,
+    "lon": 17.0945
+  },
+  "parent": {
+    "locality": ["Zacharzyce"],
+    "region": ["dolnoslaskie"],
+    "country": ["Polska"]
+  },
+  "addendum": {
+    "osm": {
+      "house_numbers": "1,2,3,4,5,6,7,8,9,10,..."
+    }
+  }
+}
+```
+
+**API Usage**:
+
+Search for streets:
+```
+GET /v1/search?text=Akacjowa, Zacharzyce&layers=street
+GET /v1/autocomplete?text=Akacjowa&layers=street,address
+```
+
+**Configuration**:
+
+```json
+{
+  "imports": {
+    "openstreetmap": {
+      "aggregateHouseNumbers": true,
+      "importStreets": true
+    }
+  }
+}
+```
+
+**Migration Notes**:
+- Fully backward compatible with v1.5.x
+- Old LevelDB data automatically migrated to new format
+- Both array and object formats supported during transition
+- Recommended: Fresh import for optimal street document generation
+
+### v1.5.2 (2025-12-22)
+
+**🐛 CRITICAL FIX: House numbers now grouped correctly by locality**
+
+- 🐛 **FIXED**: House numbers aggregation now uses OSM tags (`addr:city`, `addr:state`, `addr:country`) instead of `parent` hierarchy
+- ✨ Streets with the same name in different localities now have separate house number lists
+- 🔍 **Root cause**: In Pass 1, `parent.locality/region/country` are empty (added by WOF lookup in Pass 2), so all streets with same name were grouped together
+- 🎯 **Solution**: Read directly from `doc.getMeta('tags')` which contains raw OSM data available immediately
+- 🧪 Updated tests to set both OSM tags and parent hierarchy
+- 📝 Added detailed comments explaining the logic
+
+**Example fix**:
+- **Before**: All "Akacjowa" streets in entire region shared the same 150+ house numbers
+- **After**: "Akacjowa" in Zacharzyce, Ślęza, Radwanice each have their own correct house numbers
+
+**Technical details**:
+- `generateStreetKey()` now reads: `tags['addr:city']` first, falls back to `parent.locality[0]`
+- Works in both Pass 1 (collection) and Pass 2 (enrichment)
+- Maintains consistency between LevelDB key generation and lookup
 
 ### v1.5.1 (2025-12-22)
 

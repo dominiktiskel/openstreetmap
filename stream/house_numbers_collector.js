@@ -27,12 +27,19 @@ const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation')
 /**
  * Generate a unique key for a street based on its full administrative hierarchy.
  * Format: "street|locality|region|country"
+ * 
+ * NOTE: In Pass 1, parent hierarchy is not yet populated (added by WOF lookup in Pass 2).
+ * So we read directly from OSM tags (addr:city, addr:state, addr:country) which are
+ * available immediately from the raw OSM data.
  */
 function generateStreetKey(doc) {
   const street = doc.getAddress('street') || '';
-  const locality = _.get(doc, 'parent.locality[0]', '');
-  const region = _.get(doc, 'parent.region[0]', '');
-  const country = _.get(doc, 'parent.country[0]', '');
+  
+  // Try to get admin data from OSM tags first (available in Pass 1)
+  const tags = doc.getMeta('tags') || {};
+  const locality = tags['addr:city'] || _.get(doc, 'parent.locality[0]', '');
+  const region = tags['addr:state'] || _.get(doc, 'parent.region[0]', '');
+  const country = tags['addr:country'] || _.get(doc, 'parent.country[0]', '');
   
   return [street, locality, region, country]
     .map(s => String(s).trim().toLowerCase())
@@ -102,30 +109,70 @@ module.exports = function() {
             const streetKey = generateStreetKey(doc);
             docCount++;
 
-            // Read existing numbers, add new one, write back
-            db.get(streetKey, (err, numbers) => {
-              let numbersSet;
+            // Read existing data, update, write back
+            db.get(streetKey, (err, data) => {
+              // Initialize aggregate structure
+              let aggregate;
               
               if (err && err.notFound) {
-                // New street
-                numbersSet = new Set();
+                // New street - create initial structure
+                const tags = doc.getMeta('tags') || {};
+                aggregate = {
+                  numbers: [],
+                  centroid: { lat: 0, lon: 0, count: 0 },
+                  locality: tags['addr:city'] || '',
+                  region: tags['addr:state'] || '',
+                  country: tags['addr:country'] || ''
+                };
                 streetCount++;
               } else if (err) {
                 // Unexpected error
                 peliasLogger.error('[house_numbers_collector] LevelDB error:', err);
                 return;
               } else {
-                // Existing street
-                numbersSet = new Set(numbers);
+                // Existing street - handle both old array format and new object format
+                if (Array.isArray(data)) {
+                  // Migrate from old format (v1.5.x) to new format
+                  const tags = doc.getMeta('tags') || {};
+                  aggregate = {
+                    numbers: data,
+                    centroid: { lat: 0, lon: 0, count: 0 },
+                    locality: tags['addr:city'] || '',
+                    region: tags['addr:state'] || '',
+                    country: tags['addr:country'] || ''
+                  };
+                } else {
+                  aggregate = data;
+                }
               }
               
-              // Add new number
+              // Add new house number
+              const numbersSet = new Set(aggregate.numbers);
               numbersSet.add(String(houseNumber).trim());
+              aggregate.numbers = Array.from(numbersSet).sort(naturalSort);
               
-              // Sort and save
-              const sortedNumbers = Array.from(numbersSet).sort(naturalSort);
+              // Accumulate coordinates for centroid calculation
+              const centroid = doc.getCentroid();
+              if (centroid && centroid.lat && centroid.lon) {
+                aggregate.centroid.lat += centroid.lat;
+                aggregate.centroid.lon += centroid.lon;
+                aggregate.centroid.count++;
+              }
               
-              db.put(streetKey, sortedNumbers, (putErr) => {
+              // Update admin data if available (keep first non-empty value)
+              const tags = doc.getMeta('tags') || {};
+              if (!aggregate.locality && tags['addr:city']) {
+                aggregate.locality = tags['addr:city'];
+              }
+              if (!aggregate.region && tags['addr:state']) {
+                aggregate.region = tags['addr:state'];
+              }
+              if (!aggregate.country && tags['addr:country']) {
+                aggregate.country = tags['addr:country'];
+              }
+              
+              // Save to database
+              db.put(streetKey, aggregate, (putErr) => {
                 if (putErr) {
                   peliasLogger.error('[house_numbers_collector] Error writing to LevelDB:', putErr);
                 }
