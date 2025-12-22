@@ -27,14 +27,15 @@ tape('osm_admin_extractor: test stream', function(t) {
 tape('osm_admin_extractor: document with addr:city', function(t) {
   const doc = new Document('openstreetmap', 'venue', '1');
   doc.setCentroid({ lat: 50.0, lon: 19.0 });
-  doc.address_parts = {
-    city: 'Kraków',
-    street: 'Grodzka'
-  };
+  doc.setMeta('tags', {
+    'addr:city': 'Kraków',
+    'addr:street': 'Grodzka'
+  });
 
   test_stream([doc], stream(), function(err, actual) {
     t.false(err, 'no error');
     t.equal(actual.parent.locality[0], 'Kraków', 'locality set from OSM city');
+    t.equal(actual.parent.locality_id[0], 'osm:locality:kraków', 'locality_id generated correctly');
     t.true(Array.isArray(actual.getMeta('osmAdminFields')), 'osmAdminFields metadata set');
     t.true(actual.getMeta('osmAdminFields').includes('locality'), 'locality in osmAdminFields');
     t.end();
@@ -44,13 +45,14 @@ tape('osm_admin_extractor: document with addr:city', function(t) {
 tape('osm_admin_extractor: document with addr:state', function(t) {
   const doc = new Document('openstreetmap', 'venue', '1');
   doc.setCentroid({ lat: 50.0, lon: 19.0 });
-  doc.address_parts = {
-    state: 'Lesser Poland'
-  };
+  doc.setMeta('tags', {
+    'addr:state': 'Lesser Poland'
+  });
 
   test_stream([doc], stream(), function(err, actual) {
     t.false(err, 'no error');
     t.equal(actual.parent.region[0], 'Lesser Poland', 'region set from OSM state');
+    t.equal(actual.parent.region_id[0], 'osm:region:lesser_poland', 'region_id generated correctly');
     t.true(actual.getMeta('osmAdminFields').includes('region'), 'region in osmAdminFields');
     t.end();
   });
@@ -59,13 +61,14 @@ tape('osm_admin_extractor: document with addr:state', function(t) {
 tape('osm_admin_extractor: document with addr:country', function(t) {
   const doc = new Document('openstreetmap', 'venue', '1');
   doc.setCentroid({ lat: 50.0, lon: 19.0 });
-  doc.address_parts = {
-    country: 'Poland'
-  };
+  doc.setMeta('tags', {
+    'addr:country': 'Poland'
+  });
 
   test_stream([doc], stream(), function(err, actual) {
     t.false(err, 'no error');
     t.equal(actual.parent.country[0], 'Poland', 'country set from OSM country');
+    t.equal(actual.parent.country_id[0], 'osm:country:poland', 'country_id generated correctly');
     t.true(actual.getMeta('osmAdminFields').includes('country'), 'country in osmAdminFields');
     t.end();
   });
@@ -74,11 +77,11 @@ tape('osm_admin_extractor: document with addr:country', function(t) {
 tape('osm_admin_extractor: document with all admin fields', function(t) {
   const doc = new Document('openstreetmap', 'venue', '1');
   doc.setCentroid({ lat: 50.0, lon: 19.0 });
-  doc.address_parts = {
-    city: 'Kraków',
-    state: 'Lesser Poland',
-    country: 'Poland'
-  };
+  doc.setMeta('tags', {
+    'addr:city': 'Kraków',
+    'addr:state': 'Lesser Poland',
+    'addr:country': 'Poland'
+  });
 
   test_stream([doc], stream(), function(err, actual) {
     t.false(err, 'no error');
@@ -98,10 +101,10 @@ tape('osm_admin_extractor: document with all admin fields', function(t) {
 tape('osm_admin_extractor: document without admin tags passes through', function(t) {
   const doc = new Document('openstreetmap', 'venue', '1');
   doc.setCentroid({ lat: 50.0, lon: 19.0 });
-  doc.address_parts = {
-    street: 'Main Street',
-    number: '123'
-  };
+  doc.setMeta('tags', {
+    'addr:street': 'Main Street',
+    'addr:housenumber': '123'
+  });
 
   test_stream([doc], stream(), function(err, actual) {
     t.false(err, 'no error');
@@ -116,11 +119,11 @@ tape('osm_admin_extractor: document without admin tags passes through', function
 tape('osm_admin_extractor: document with empty admin values', function(t) {
   const doc = new Document('openstreetmap', 'venue', '1');
   doc.setCentroid({ lat: 50.0, lon: 19.0 });
-  doc.address_parts = {
-    city: '',
-    state: '   ',
-    country: null
-  };
+  doc.setMeta('tags', {
+    'addr:city': '',
+    'addr:state': '   ',
+    'addr:country': null
+  });
 
   test_stream([doc], stream(), function(err, actual) {
     t.false(err, 'no error');
@@ -135,11 +138,11 @@ tape('osm_admin_extractor: document with empty admin values', function(t) {
 tape('osm_admin_extractor: document with partial admin data', function(t) {
   const doc = new Document('openstreetmap', 'venue', '1');
   doc.setCentroid({ lat: 50.0, lon: 19.0 });
-  doc.address_parts = {
-    city: 'Kraków',
-    country: 'Poland'
-    // state is missing
-  };
+  doc.setMeta('tags', {
+    'addr:city': 'Kraków',
+    'addr:country': 'Poland'
+    // addr:state is missing
+  });
 
   test_stream([doc], stream(), function(err, actual) {
     t.false(err, 'no error');
@@ -159,11 +162,11 @@ tape('osm_admin_extractor: document with partial admin data', function(t) {
 tape('osm_admin_extractor: trims whitespace from values', function(t) {
   const doc = new Document('openstreetmap', 'venue', '1');
   doc.setCentroid({ lat: 50.0, lon: 19.0 });
-  doc.address_parts = {
-    city: '  Kraków  ',
-    state: '\tLesser Poland\n',
-    country: ' Poland '
-  };
+  doc.setMeta('tags', {
+    'addr:city': '  Kraków  ',
+    'addr:state': '\tLesser Poland\n',
+    'addr:country': ' Poland '
+  });
 
   test_stream([doc], stream(), function(err, actual) {
     t.false(err, 'no error');

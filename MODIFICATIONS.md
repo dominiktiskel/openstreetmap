@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.4.1
+## Version: v1.5.1
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.4.1`
+- **Docker Image**: `tiskel/openstreetmap:v1.5.1`
 
 ## Key Features
 
@@ -321,6 +321,34 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.5.1 (2025-12-22)
+
+**🐛 HOTFIX: Fixed addParent null ID error**
+
+- 🐛 **FIXED**: Changed `addParent(field, value, null, null)` to use generated IDs
+- ✨ OSM admin IDs now generated in format: `osm:locality:cityname`
+- 🧪 Added tests to verify ID generation
+- 📝 Updated documentation with ID format
+
+**Root cause**: `pelias-model` requires `id` parameter to be a string, not `null`. The error `invalid document type, expecting: string got: null` occurred because we passed `null` for the `id` parameter.
+
+**Solution**: Generate unique IDs in format `osm:fieldname:value_lowercase` (e.g., `osm:locality:zacharzyce`)
+
+### v1.5.0 (2025-12-22)
+
+**🐛 CRITICAL FIX: OSM admin priority now works correctly**
+
+- 🐛 **FIXED**: `osm_admin_extractor.js` now reads directly from OSM tags instead of `address_parts`
+- ✨ Addresses with `addr:city=Zacharzyce` now correctly use OSM data instead of WOF
+- ✨ Enhanced debug logging for troubleshooting admin data extraction
+- 🧪 Updated all tests to use OSM tags API (`setMeta('tags', ...)`)
+- 📝 Confirmed documentation is accurate
+- ⚠️ **Breaking**: Tests now require OSM tags to be set via `setMeta('tags')` not `address_parts`
+
+**Root cause**: `addr:city`, `addr:state`, `addr:country` were never added to `address_parts` (they are commented out in `address_karlsruhe.js`), so the extractor was reading from an empty object.
+
+**Solution**: Changed `osm_admin_extractor.js` to read directly from `doc.getMeta('tags')` which contains the raw OSM tags.
 
 ### v1.4.1 (2025-12-22)
 
