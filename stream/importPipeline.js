@@ -13,6 +13,7 @@ streams.tagMapper = require('./tag_mapper');
 streams.addressesWithoutStreet = require('./addresses_without_street');
 streams.adminLookup = require('pelias-wof-admin-lookup').create;
 streams.addressExtractor = require('./address_extractor');
+streams.houseNumbersAggregator = require('./house_numbers_aggregator');
 streams.categoryMapper = require('./category_mapper');
 streams.addendumMapper = require('./addendum_mapper');
 streams.popularityMapper = require('./popularity_mapper');
@@ -27,6 +28,7 @@ streams.import = function(){
     .pipe( streams.addressesWithoutStreet() )
     .pipe( streams.tagMapper() )
     .pipe( streams.addressExtractor() )
+    .pipe( streams.houseNumbersAggregator() )  // Aggregate house numbers per street
     .pipe( streams.blacklistStream() )
     .pipe( streams.categoryMapper( categoryDefaults ) )
     .pipe( streams.addendumMapper() )
