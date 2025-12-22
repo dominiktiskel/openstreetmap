@@ -62,98 +62,93 @@ module.exports = function() {
       peliasLogger.info('[street_generator] ========================================');
 
       const db = new Level(DB_PATH, { valueEncoding: 'json' });
-      const stream = db.createReadStream();
       const self = this;
 
-      stream.on('data', ({ key, value }) => {
+      // Use async iteration with level v8.x iterator API
+      (async () => {
         try {
-          // Handle both old array format and new object format
-          let aggregate;
-          if (Array.isArray(value)) {
-            // Old format (v1.5.x) - skip street generation as we don't have centroid data
-            peliasLogger.debug('[street_generator] Skipping street (old format): %s', key);
-            return;
-          } else {
-            aggregate = value;
+          // Iterate through all entries in LevelDB
+          for await (const [key, value] of db.iterator()) {
+            try {
+              // Handle both old array format and new object format
+              let aggregate;
+              if (Array.isArray(value)) {
+                // Old format (v1.5.x) - skip street generation as we don't have centroid data
+                peliasLogger.debug('[street_generator] Skipping street (old format): %s', key);
+                continue;
+              } else {
+                aggregate = value;
+              }
+
+              // Skip if no addresses or no centroid data
+              if (!aggregate.numbers || aggregate.numbers.length === 0) {
+                continue;
+              }
+              if (!aggregate.centroid || aggregate.centroid.count === 0) {
+                peliasLogger.debug('[street_generator] Skipping street (no centroid): %s', key);
+                continue;
+              }
+
+              // Parse street key
+              const [streetName, locality, region, country] = key.split('|');
+              
+              if (!streetName) {
+                peliasLogger.debug('[street_generator] Skipping street (no name): %s', key);
+                continue;
+              }
+
+              // Calculate average centroid
+              const avgLat = aggregate.centroid.lat / aggregate.centroid.count;
+              const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
+
+              // Generate unique ID for street
+              const streetId = `street_${key.replace(/\|/g, '_')}`;
+
+              // Create street document
+              const streetDoc = new Document('openstreetmap', 'street', streetId)
+                .setName('default', streetName)
+                .setCentroid({ lat: avgLat, lon: avgLon });
+
+              // Add house numbers to addendum
+              streetDoc.setAddendum('osm', {
+                house_numbers: aggregate.numbers.join(',')
+              });
+
+              // Add parent hierarchy
+              // Note: We use the raw values from aggregate (which came from OSM tags)
+              // These will be enriched by admin lookup downstream
+              if (aggregate.locality) {
+                streetDoc.addParent('locality', aggregate.locality, `osm:locality:${aggregate.locality.toLowerCase()}`);
+              }
+              if (aggregate.region) {
+                streetDoc.addParent('region', aggregate.region, `osm:region:${aggregate.region.toLowerCase()}`);
+              }
+              if (aggregate.country) {
+                streetDoc.addParent('country', aggregate.country, `osm:country:${aggregate.country.toLowerCase()}`);
+              }
+
+              // Push street document to pipeline
+              self.push(streetDoc);
+              streetsGeneratedCount++;
+
+              // Log progress every 1000 streets
+              if (streetsGeneratedCount % 1000 === 0) {
+                peliasLogger.info('[street_generator] Generated %d streets', streetsGeneratedCount);
+              }
+            } catch (e) {
+              peliasLogger.error('[street_generator] Error generating street for key: %s', key);
+              peliasLogger.error(e.stack);
+            }
           }
 
-          // Skip if no addresses or no centroid data
-          if (!aggregate.numbers || aggregate.numbers.length === 0) {
-            return;
-          }
-          if (!aggregate.centroid || aggregate.centroid.count === 0) {
-            peliasLogger.debug('[street_generator] Skipping street (no centroid): %s', key);
-            return;
-          }
+          peliasLogger.info('[street_generator] ========================================');
+          peliasLogger.info('[street_generator] Generated %d street documents', streetsGeneratedCount);
+          peliasLogger.info('[street_generator] Passed through %d documents', passedThroughCount);
+          peliasLogger.info('[street_generator] ========================================');
 
-          // Parse street key
-          const [streetName, locality, region, country] = key.split('|');
-          
-          if (!streetName) {
-            peliasLogger.debug('[street_generator] Skipping street (no name): %s', key);
-            return;
-          }
-
-          // Calculate average centroid
-          const avgLat = aggregate.centroid.lat / aggregate.centroid.count;
-          const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
-
-          // Generate unique ID for street
-          const streetId = `street_${key.replace(/\|/g, '_')}`;
-
-          // Create street document
-          const streetDoc = new Document('openstreetmap', 'street', streetId)
-            .setName('default', streetName)
-            .setCentroid({ lat: avgLat, lon: avgLon });
-
-          // Add house numbers to addendum
-          streetDoc.setAddendum('osm', {
-            house_numbers: aggregate.numbers.join(',')
-          });
-
-          // Add parent hierarchy
-          // Note: We use the raw values from aggregate (which came from OSM tags)
-          // These will be enriched by admin lookup downstream
-          if (aggregate.locality) {
-            streetDoc.addParent('locality', aggregate.locality, `osm:locality:${aggregate.locality.toLowerCase()}`);
-          }
-          if (aggregate.region) {
-            streetDoc.addParent('region', aggregate.region, `osm:region:${aggregate.region.toLowerCase()}`);
-          }
-          if (aggregate.country) {
-            streetDoc.addParent('country', aggregate.country, `osm:country:${aggregate.country.toLowerCase()}`);
-          }
-
-          // Push street document to pipeline
-          self.push(streetDoc);
-          streetsGeneratedCount++;
-
-          // Log progress every 1000 streets
-          if (streetsGeneratedCount % 1000 === 0) {
-            peliasLogger.info('[street_generator] Generated %d streets', streetsGeneratedCount);
-          }
-        } catch (e) {
-          peliasLogger.error('[street_generator] Error generating street for key: %s', key);
-          peliasLogger.error(e.stack);
-        }
-      });
-
-      stream.on('error', (err) => {
-        peliasLogger.error('[street_generator] Error reading from LevelDB:', err);
-        db.close(() => done(err));
-      });
-
-      stream.on('end', () => {
-        peliasLogger.info('[street_generator] ========================================');
-        peliasLogger.info('[street_generator] Generated %d street documents', streetsGeneratedCount);
-        peliasLogger.info('[street_generator] Passed through %d documents', passedThroughCount);
-        peliasLogger.info('[street_generator] ========================================');
-
-        // Close and cleanup database
-        db.close((closeErr) => {
-          if (closeErr) {
-            peliasLogger.error('[street_generator] Error closing database:', closeErr);
-          }
+          // Close and cleanup database
+          await db.close();
+          peliasLogger.info('[street_generator] Database closed successfully');
 
           // Cleanup LevelDB
           if (fs.existsSync(DB_PATH)) {
@@ -167,8 +162,16 @@ module.exports = function() {
           }
 
           done();
-        });
-      });
+        } catch (err) {
+          peliasLogger.error('[street_generator] Error reading from LevelDB:', err);
+          try {
+            await db.close();
+          } catch (closeErr) {
+            peliasLogger.error('[street_generator] Error closing database:', closeErr);
+          }
+          done(err);
+        }
+      })();
     }
   );
 };

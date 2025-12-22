@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.6.0
+## Version: v1.6.1
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.6.0`
+- **Docker Image**: `tiskel/openstreetmap:v1.6.1`
 
 ## Key Features
 
@@ -399,6 +399,27 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.6.1 (2025-12-22)
+
+**🐛 HOTFIX: Fixed LevelDB iterator API for street generation**
+
+- 🐛 **FIXED**: Changed `db.createReadStream()` to async iterator API for level v8.x compatibility
+- ✨ Street generator now uses `for await (const [key, value] of db.iterator())`
+- 🔧 Proper async/await error handling for database operations
+- ✅ Compatible with `level` package v8.x API
+
+**Root cause**: In `level` v8.x, the `createReadStream()` method was removed. The new API uses async iterators.
+
+**Solution**: Replaced stream-based reading with async iteration:
+```javascript
+// Before (v1.6.0) - doesn't work with level v8.x
+const stream = db.createReadStream();
+stream.on('data', ({ key, value }) => { ... });
+
+// After (v1.6.1) - correct level v8.x API
+for await (const [key, value] of db.iterator()) { ... }
+```
 
 ### v1.6.0 (2025-12-22)
 
