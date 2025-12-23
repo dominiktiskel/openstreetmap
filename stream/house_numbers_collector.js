@@ -2,11 +2,20 @@
   House Numbers Collector (Pass 1 of streaming aggregation)
   
   This stream processor collects house numbers from address documents and stores
-  them in LevelDB for later enrichment. Uses streaming to handle unlimited addresses
-  without memory issues.
+  them in LevelDB for later enrichment. Uses periodic batch writes to balance
+  performance and memory usage.
   
-  Pass 1: Collect → LevelDB
+  Strategy:
+  - Collect addresses in memory buffer (Map of street → aggregates)
+  - Flush to LevelDB every BATCH_SIZE addresses (default: 10,000)
+  - Merge with existing LevelDB data on each flush
+  - Final flush at end of stream
+  
+  Pass 1: Collect in buffer → Periodic batch write → Merge → LevelDB
   Pass 2: (enricher) Read from LevelDB → Add addendum
+  
+  Memory usage: ~5-10 MB per batch (BATCH_SIZE addresses across ~1-5K streets).
+  This scales to unlimited addresses while avoiding race conditions.
   
   @see: house_numbers_enricher.js for Pass 2
 **/
@@ -23,6 +32,11 @@ const fs = require('fs');
 const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
 const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
 const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation');
+
+// Batch write every N addresses to limit memory usage
+// For ~30M addresses in Poland with ~100K streets, this results in ~300 batch writes
+// Memory usage: buffer holds max ~10K addresses across potentially 1-5K streets = ~5-10 MB
+const BATCH_SIZE = 10000;
 
 /**
  * Generate a unique key for a street based on locality and geographic coordinates.
@@ -77,14 +91,93 @@ function naturalSort(a, b) {
   return 0;
 }
 
+/**
+ * Writes buffer to LevelDB, merging with existing data.
+ * Returns a promise that resolves when write is complete.
+ */
+async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
+  if (buffer.size === 0) {
+    return 0;
+  }
+
+  const batch = db.batch();
+  let writeCount = 0;
+
+  for (const [streetKey, bufferAggregate] of buffer.entries()) {
+    try {
+      // Try to read existing data from LevelDB
+      let existingAggregate = null;
+      try {
+        existingAggregate = await db.get(streetKey);
+      } catch (err) {
+        if (!err.notFound) {
+          throw err; // Unexpected error
+        }
+        // Key not found - this is fine, it's a new street
+      }
+
+      let finalAggregate;
+      if (existingAggregate) {
+        // Merge with existing data
+        const existingNumbers = new Set(existingAggregate.numbers || []);
+        const bufferNumbers = bufferAggregate.numbers;
+        
+        // Merge number sets
+        for (const num of bufferNumbers) {
+          existingNumbers.add(num);
+        }
+        
+        finalAggregate = {
+          numbers: Array.from(existingNumbers).sort(naturalSort),
+          centroid: {
+            lat: existingAggregate.centroid.lat + bufferAggregate.centroid.lat,
+            lon: existingAggregate.centroid.lon + bufferAggregate.centroid.lon,
+            count: existingAggregate.centroid.count + bufferAggregate.centroid.count
+          },
+          streetName: existingAggregate.streetName || bufferAggregate.streetName,
+          locality: existingAggregate.locality || bufferAggregate.locality
+        };
+      } else {
+        // New street - convert Set to sorted array
+        finalAggregate = {
+          numbers: Array.from(bufferAggregate.numbers).sort(naturalSort),
+          centroid: bufferAggregate.centroid,
+          streetName: bufferAggregate.streetName,
+          locality: bufferAggregate.locality
+        };
+      }
+
+      batch.put(streetKey, finalAggregate);
+      writeCount++;
+    } catch (err) {
+      peliasLogger.error('[house_numbers_collector] Error processing street "%s":', streetKey, err);
+      // Continue with other streets
+    }
+  }
+
+  // Commit batch
+  await batch.write();
+  peliasLogger.info(
+    '[house_numbers_collector] Flushed %d streets to LevelDB (total: ~%d)',
+    writeCount,
+    totalStreetCount
+  );
+
+  return writeCount;
+}
+
 module.exports = function() {
   let db;
   let docCount = 0;
-  let streetCount = 0;
+  let totalStreetCount = 0;
+  let batchWriteCount = 0;
   let enabled = ENABLE_AGGREGATION;
+  
+  // In-memory buffer for periodic batch writes
+  const buffer = new Map();
 
   return through.obj(
-    // Transform function - collect to LevelDB
+    // Transform function - collect to buffer and flush periodically
     function(doc, enc, next) {
       // If aggregation is disabled, just pass through
       if (!enabled) {
@@ -103,6 +196,7 @@ module.exports = function() {
           db = new Level(DB_PATH, { valueEncoding: 'json' });
           peliasLogger.info('[house_numbers_collector] Pass 1: Collection phase started');
           peliasLogger.info('[house_numbers_collector] Database: %s', DB_PATH);
+          peliasLogger.info('[house_numbers_collector] Batch size: %d addresses', BATCH_SIZE);
         }
 
         // Only process address documents
@@ -112,84 +206,61 @@ module.exports = function() {
             const streetKey = generateStreetKey(doc);
             docCount++;
 
-            // Read existing data, update, write back
-            db.get(streetKey, (err, data) => {
-              // Initialize aggregate structure
-              let aggregate;
-              
-              if (err && err.notFound) {
-                // New street - create initial structure
-                const tags = doc.getMeta('tags') || {};
-                aggregate = {
-                  numbers: [],
-                  centroid: { lat: 0, lon: 0, count: 0 },
-                  streetName: doc.getAddress('street') || '', // Store original street name with capitalization
-                  locality: tags['addr:city'] || ''
-                  // Note: region/country removed - WOF lookup will add full hierarchy to street documents
-                };
-                streetCount++;
-              } else if (err) {
-                // Unexpected error
-                peliasLogger.error('[house_numbers_collector] LevelDB error:', err);
-                return;
-              } else {
-                // Existing street - handle both old array format and new object format
-                if (Array.isArray(data)) {
-                  // Migrate from old format (v1.5.x) to new format
-                  const tags = doc.getMeta('tags') || {};
-                  aggregate = {
-                    numbers: data,
-                    centroid: { lat: 0, lon: 0, count: 0 },
-                    streetName: doc.getAddress('street') || '',
-                    locality: tags['addr:city'] || ''
-                  };
-                } else {
-                  aggregate = data;
-                  // Ensure streetName exists (for backward compatibility with v1.6.x)
-                  if (!aggregate.streetName) {
-                    aggregate.streetName = doc.getAddress('street') || '';
-                  }
-                  // Remove deprecated fields (for backward compatibility with v1.6.x)
-                  delete aggregate.region;
-                  delete aggregate.country;
-                }
-              }
-              
-              // Add new house number
-              const numbersSet = new Set(aggregate.numbers);
-              numbersSet.add(String(houseNumber).trim());
-              aggregate.numbers = Array.from(numbersSet).sort(naturalSort);
-              
-              // Accumulate coordinates for centroid calculation
-              const centroid = doc.getCentroid();
-              if (centroid && centroid.lat && centroid.lon) {
-                aggregate.centroid.lat += centroid.lat;
-                aggregate.centroid.lon += centroid.lon;
-                aggregate.centroid.count++;
-              }
-              
-              // Update admin data if available (keep first non-empty value)
+            // Get or create aggregate in buffer
+            let aggregate = buffer.get(streetKey);
+            if (!aggregate) {
+              // New street in buffer - create initial structure
               const tags = doc.getMeta('tags') || {};
-              if (!aggregate.locality && tags['addr:city']) {
-                aggregate.locality = tags['addr:city'];
-              }
-              // Note: region/country no longer stored - WOF lookup will provide full hierarchy
-              
-              // Save to database
-              db.put(streetKey, aggregate, (putErr) => {
-                if (putErr) {
-                  peliasLogger.error('[house_numbers_collector] Error writing to LevelDB:', putErr);
-                }
-              });
-            });
+              aggregate = {
+                numbers: new Set(), // Use Set for automatic deduplication
+                centroid: { lat: 0, lon: 0, count: 0 },
+                streetName: doc.getAddress('street') || '',
+                locality: tags['addr:city'] || ''
+              };
+              buffer.set(streetKey, aggregate);
+              totalStreetCount++; // May count duplicates across batches, but that's OK for logging
+            }
+            
+            // Add house number (Set automatically handles duplicates)
+            aggregate.numbers.add(String(houseNumber).trim());
+            
+            // Accumulate coordinates for centroid calculation
+            const centroid = doc.getCentroid();
+            if (centroid && centroid.lat && centroid.lon) {
+              aggregate.centroid.lat += centroid.lat;
+              aggregate.centroid.lon += centroid.lon;
+              aggregate.centroid.count++;
+            }
+            
+            // Update admin data if available (keep first non-empty value)
+            const tags = doc.getMeta('tags') || {};
+            if (!aggregate.locality && tags['addr:city']) {
+              aggregate.locality = tags['addr:city'];
+            }
+            
+            // Update streetName if not set
+            if (!aggregate.streetName && doc.getAddress('street')) {
+              aggregate.streetName = doc.getAddress('street');
+            }
 
-            // Log progress every 10K documents
-            if (docCount % 10000 === 0) {
+            // Periodic batch write to limit memory usage
+            if (docCount % BATCH_SIZE === 0) {
               peliasLogger.info(
-                '[house_numbers_collector] Processed %d addresses across %d streets',
+                '[house_numbers_collector] Processed %d addresses, flushing buffer (%d streets)...',
                 docCount,
-                streetCount
+                buffer.size
               );
+              
+              // Flush buffer to LevelDB asynchronously
+              flushBufferToLevelDB(db, buffer, totalStreetCount)
+                .then(() => {
+                  batchWriteCount++;
+                  buffer.clear(); // Clear buffer after successful write
+                })
+                .catch((err) => {
+                  peliasLogger.error('[house_numbers_collector] Error flushing buffer:', err);
+                  // Don't clear buffer on error - will retry in next batch or flush
+                });
             }
           }
         }
@@ -205,29 +276,37 @@ module.exports = function() {
       return next();
     },
     
-    // Flush function - close database
-    function(done) {
+    // Flush function - write remaining buffer to LevelDB and close database
+    async function(done) {
       if (!enabled) {
         return done();
       }
 
-      if (db) {
-        peliasLogger.info(
-          '[house_numbers_collector] Pass 1 complete: %d addresses, %d unique streets',
-          docCount,
-          streetCount
-        );
+      peliasLogger.info(
+        '[house_numbers_collector] Pass 1 complete: %d addresses processed, %d batch writes',
+        docCount,
+        batchWriteCount
+      );
+      
+      try {
+        // Flush any remaining data in buffer
+        if (buffer.size > 0) {
+          peliasLogger.info('[house_numbers_collector] Flushing final buffer (%d streets)...', buffer.size);
+          await flushBufferToLevelDB(db, buffer, totalStreetCount);
+          buffer.clear();
+        }
+
+        // Close database
+        if (db) {
+          await db.close();
+          peliasLogger.info('[house_numbers_collector] Database closed successfully');
+        }
         
-        db.close((err) => {
-          if (err) {
-            peliasLogger.error('[house_numbers_collector] Error closing database:', err);
-          } else {
-            peliasLogger.info('[house_numbers_collector] Database closed successfully');
-          }
-          done();
-        });
-      } else {
         done();
+      } catch (e) {
+        peliasLogger.error('[house_numbers_collector] Error during flush:', e);
+        buffer.clear();
+        done(e);
       }
     }
   );
