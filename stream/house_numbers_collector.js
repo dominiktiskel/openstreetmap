@@ -221,7 +221,13 @@ module.exports = function() {
               aggregate = {
                 numbers: new Set(), // Use Set for automatic deduplication
                 centroid: { lat: 0, lon: 0, count: 0 },
-                streetName: doc.getAddress('street') || ''
+                streetName: doc.getAddress('street') || '',
+                // OSM admin data (for prioritizing over WOF)
+                osmAdmin: {
+                  locality: doc.getAddress('city') || '',
+                  region: doc.getAddress('state') || '',
+                  country: doc.getAddress('country') || ''
+                }
               };
               buffer.set(streetKey, aggregate);
               totalStreetCount++; // May count duplicates across batches, but that's OK for logging
@@ -241,6 +247,17 @@ module.exports = function() {
             // Update streetName if not set (preserve original capitalization)
             if (!aggregate.streetName && doc.getAddress('street')) {
               aggregate.streetName = doc.getAddress('street');
+            }
+            
+            // Update OSM admin data if not set (use first available value from any address)
+            if (!aggregate.osmAdmin.locality && doc.getAddress('city')) {
+              aggregate.osmAdmin.locality = doc.getAddress('city');
+            }
+            if (!aggregate.osmAdmin.region && doc.getAddress('state')) {
+              aggregate.osmAdmin.region = doc.getAddress('state');
+            }
+            if (!aggregate.osmAdmin.country && doc.getAddress('country')) {
+              aggregate.osmAdmin.country = doc.getAddress('country');
             }
 
             // Periodic batch write to limit memory usage

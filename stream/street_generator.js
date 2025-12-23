@@ -119,10 +119,46 @@ module.exports = function() {
                 house_numbers: aggregate.numbers.join(',')
               });
 
-              // Parent hierarchy will be added by adminLookup() downstream
-              // when street documents pass through the WOF lookup pipeline.
-              // This ensures full hierarchy (locality, region, county, country, localadmin)
-              // is populated correctly for all street documents.
+              // Set OSM admin data BEFORE WOF lookup (v1.8.2)
+              // This gives priority to OSM data (addr:city, addr:state, addr:country)
+              // over WOF, while still using WOF as fallback for missing fields.
+              const osmAdminFields = [];
+              
+              if (aggregate.osmAdmin) {
+                // Add locality from OSM (addr:city)
+                if (aggregate.osmAdmin.locality && aggregate.osmAdmin.locality.trim().length > 0) {
+                  const locality = aggregate.osmAdmin.locality.trim();
+                  const osmId = 'osm:locality:' + locality.toLowerCase().replace(/\s+/g, '_');
+                  streetDoc.addParent('locality', locality, osmId, undefined);
+                  osmAdminFields.push('locality');
+                }
+                
+                // Add region from OSM (addr:state)
+                if (aggregate.osmAdmin.region && aggregate.osmAdmin.region.trim().length > 0) {
+                  const region = aggregate.osmAdmin.region.trim();
+                  const osmId = 'osm:region:' + region.toLowerCase().replace(/\s+/g, '_');
+                  streetDoc.addParent('region', region, osmId, undefined);
+                  osmAdminFields.push('region');
+                }
+                
+                // Add country from OSM (addr:country)
+                if (aggregate.osmAdmin.country && aggregate.osmAdmin.country.trim().length > 0) {
+                  const country = aggregate.osmAdmin.country.trim();
+                  const osmId = 'osm:country:' + country.toLowerCase().replace(/\s+/g, '_');
+                  streetDoc.addParent('country', country, osmId, undefined);
+                  osmAdminFields.push('country');
+                }
+              }
+              
+              // Mark which fields came from OSM so WOF lookup can respect them
+              if (osmAdminFields.length > 0) {
+                streetDoc.setMeta('osmAdminFields', osmAdminFields);
+              }
+              
+              // WOF adminLookup() downstream will:
+              // - Respect OSM fields marked in osmAdminFields
+              // - Fill in missing fields (county, localadmin, etc.)
+              // - Provide IDs and abbreviations for WOF-sourced fields
 
               // Push street document to pipeline
               self.push(streetDoc);

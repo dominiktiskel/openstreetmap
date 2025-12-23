@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.1
+## Version: v1.8.2
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.1`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.2`
 
 ## Key Features
 
@@ -402,6 +402,85 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.2 (2025-12-23)
+
+**🎯 FIX: OSM admin data priority for street documents**
+
+- ✅ **FIXED**: Street documents now use OSM admin data (addr:city, addr:state, addr:country) with priority over WOF
+- 🔧 **IMPROVED**: WOF lookup now only fills missing admin fields, doesn't overwrite OSM data
+- 🐛 **PROBLEM SOLVED**: Streets now appear in correct locality even when WOF has incomplete data
+
+**Problem:**
+
+When generating street documents, only the centroid was used for admin lookup via WOF. If WOF didn't have accurate locality data for that coordinate, the street would be missing `parent.locality` or have incorrect locality, making it unsearchable by city name.
+
+Example:
+```
+Query: "Akacjowa, Krzyżanowice"
+Result: ❌ No street found
+
+ES data:
+- Address documents: locality = "Krzyżanowice" (from OSM addr:city) ✅
+- Street document: no locality field (WOF didn't return it) ❌
+```
+
+**Root Cause:**
+
+1. **Addresses** got `locality: "Krzyżanowice"` from OSM tag `addr:city` (via `osm_admin_extractor`)
+2. **Street documents** were generated only from centroid, without OSM tags
+3. **WOF lookup** for centroid `(51.177, 17.054)` didn't return locality "Krzyżanowice"
+4. Query `text=Akacjowa, Krzyżanowice` didn't match because street had no locality
+
+**Solution (v1.8.2):**
+
+Modified the import pipeline to aggregate OSM admin data from addresses and apply it to street documents BEFORE WOF lookup:
+
+1. **Collector phase** (`house_numbers_collector.js`):
+   - Now aggregates `osmAdmin: { locality, region, country }` from OSM tags
+   - Stores this data in LevelDB alongside street name and house numbers
+
+2. **Generator phase** (`street_generator.js`):
+   - Reads aggregated OSM admin data from LevelDB
+   - Sets `parent.locality`, `parent.region`, `parent.country` from OSM BEFORE WOF lookup
+   - Marks these fields with `osmAdminFields` metadata to protect from WOF overwrite
+   - WOF then only fills missing fields (county, localadmin, etc.)
+
+**Data Priority:**
+1. ✅ **OSM tags** (`addr:city`, `addr:state`, `addr:country`) - **HIGHEST PRIORITY**
+2. ✅ **WOF lookup** - fills missing fields only
+
+**Files Changed:**
+- `stream/house_numbers_collector.js` - aggregate OSM admin data
+- `stream/street_generator.js` - apply OSM admin before WOF lookup
+
+**Migration:**
+
+This is a **BREAKING CHANGE** - requires full reimport:
+
+```bash
+# Update docker-compose.yml:
+image: tiskel/openstreetmap:v1.8.2
+
+# REQUIRED: Full reimport (LevelDB structure changed)
+pelias compose pull openstreetmap
+pelias compose down
+pelias elastic drop
+pelias elastic create
+pelias import osm
+```
+
+**After v1.8.2:**
+```
+Query: "Akacjowa, Krzyżanowice"
+Result: ✅ Street found with correct locality!
+
+ES data:
+- Address documents: locality = "Krzyżanowice" (from OSM) ✅
+- Street document: locality = "Krzyżanowice" (from aggregated OSM) ✅
+```
+
+---
 
 ### v1.8.1 (2025-12-23)
 
