@@ -61,10 +61,10 @@ const BATCH_SIZE = 10000;
 function generateStreetKey(doc) {
   const street = doc.getAddress('street') || '';
   
-  // Get centroid and round to 1 decimal place (~11km precision)
+  // Get centroid and round to 2 decimal places (~1.1km precision)
   const centroid = doc.getCentroid();
-  const lat = centroid && centroid.lat ? centroid.lat.toFixed(1) : '0.0';
-  const lon = centroid && centroid.lon ? centroid.lon.toFixed(1) : '0.0';
+  const lat = centroid && centroid.lat ? centroid.lat.toFixed(2) : '0.00';
+  const lon = centroid && centroid.lon ? centroid.lon.toFixed(2) : '0.00';
   
   // Key format: street|lat|lon
   // All components lowercased for consistent matching

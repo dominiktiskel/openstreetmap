@@ -12,9 +12,9 @@
   - addendum.osm.house_numbers: comma-separated list of all house numbers
   - parent hierarchy: populated by WOF adminLookup downstream
   
-  Key Format (v1.7.2):
-  - "street|lat|lon" (e.g., "aleja akacjowa|51.1|17.0")
-  - Coordinates rounded to 0.1° (~11km)
+  Key Format (v1.8.1):
+  - "street|lat|lon" (e.g., "aleja akacjowa|51.18|17.05")
+  - Coordinates rounded to 0.01° (~1.1km)
   - Locality NOT included (causes split groups when missing from OSM)
   
   @see: house_numbers_collector.js for data collection (Pass 1)

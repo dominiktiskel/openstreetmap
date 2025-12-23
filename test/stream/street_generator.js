@@ -169,7 +169,7 @@ tape('street_generator: generates multiple street documents', (test) => {
 // Test: Street generator with single address
 tape('street_generator: handles street with single address', (test) => {
   const testData = [{
-    key: 'polna|51.1|17.0',
+    key: 'polna|51.11|17.04',
     value: {
       numbers: ['42'],
       centroid: { lat: 51.1079, lon: 17.0385, count: 1 },

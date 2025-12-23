@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.0
+## Version: v1.8.1
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.0`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.1`
 
 ## Key Features
 
@@ -402,6 +402,82 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.1 (2025-12-23)
+
+**⚠️ BREAKING CHANGE: Increased street aggregation precision**
+
+- 🔄 **BREAKING**: Street key coordinates changed from `.toFixed(1)` (~11km) to `.toFixed(2)` (~1.1km)
+- 🐛 **FIX**: Streets with same name in nearby localities (< 11km apart) no longer merged
+- ✅ **FIX**: Street documents now have correct WOF locality (centroid is representative)
+- 🎯 **IMPROVED**: "Akacjowa, Krzyżanowice" now returns street document with correct locality
+
+**Problem Solved:**
+
+The previous street aggregation key used `.toFixed(1)` for coordinates, which rounded to ~11km precision. This caused streets with the same name in different localities within 11km to be **merged into one** street document.
+
+**Example of the bug:**
+```
+Akacjowa in Krzyżanowice:  lat=51.1775, lon=17.0547 → key: "akacjowa|51.2|17.1"
+Akacjowa in nearby town:   lat=51.1950, lon=17.0600 → key: "akacjowa|51.2|17.1"  ← SAME KEY!
+
+Result:
+- Both streets merged into one document
+- house_numbers: "4,6,8,9,10,1,2,3,5,12,13,14,28,30,32" (mixed from both!)
+- Centroid: somewhere between the two towns
+- WOF locality: incorrect (depends on centroid position)
+```
+
+**After v1.8.1:**
+```
+Akacjowa in Krzyżanowice:  lat=51.1775, lon=17.0547 → key: "akacjowa|51.18|17.05"
+Akacjowa in nearby town:   lat=51.1950, lon=17.0600 → key: "akacjowa|51.20|17.06"  ← DIFFERENT!
+
+Result:
+- Two separate street documents
+- Each with correct house_numbers for that locality
+- Each centroid is representative of its locality
+- WOF locality lookup is accurate
+```
+
+**Technical Details:**
+
+- **Coordinate precision**: `.toFixed(2)` = 2 decimal places = ~1.1km resolution
+- **Key format**: `"street|lat|lon"` (e.g., `"akacjowa|51.18|17.05"`)
+- **Files changed**:
+  - `stream/house_numbers_collector.js` - key generation
+  - `stream/house_numbers_enricher.js` - key generation (must match collector)
+  - `stream/street_generator.js` - updated documentation
+
+**Migration:**
+
+This is a **BREAKING CHANGE** - requires full reimport:
+
+```bash
+# Update docker-compose.yml:
+image: tiskel/openstreetmap:v1.8.1
+
+# REQUIRED: Full reimport (LevelDB keys changed)
+pelias compose pull openstreetmap
+pelias compose down
+pelias elastic drop
+pelias elastic create
+pelias import osm
+```
+
+**User-reported issue:**
+
+Query: `http://vps22-backup.tiskel.com:4000/v1/autocomplete?text=Akacjowa,%20Krzyżanowice`
+- **Before v1.8.1**: Empty results (street merged with another locality)
+- **After v1.8.1**: Returns street document with `locality: "Krzyżanowice"` ✅
+
+**Why WOF lookup was correct but results were wrong:**
+
+The pipeline (`importPipeline.js`) correctly sends street documents through WOF adminLookup. However, when multiple localities are merged into one street (due to low precision), the **centroid** of the merged street can fall between localities or closer to the wrong one. WOF then returns a locality that doesn't match any of the source addresses.
+
+By increasing precision to ~1.1km, each locality keeps its own street documents, ensuring accurate centroids and correct WOF lookups.
+
+---
 
 ### v1.8.0 (2025-12-23)
 
