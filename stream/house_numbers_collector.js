@@ -14,6 +14,11 @@
   Pass 1: Collect in buffer → Periodic batch write → Merge → LevelDB
   Pass 2: (enricher) Read from LevelDB → Add addendum
   
+  Street Key Format (v1.7.2):
+  - "street|lat|lon" (e.g., "aleja akacjowa|51.1|17.0")
+  - Locality NOT included (often missing from OSM, causes split groups)
+  - Coordinates rounded to 0.1° (~11km) for reliable geographic grouping
+  
   Memory usage: ~5-10 MB per batch (BATCH_SIZE addresses across ~1-5K streets).
   This scales to unlimited addresses while avoiding race conditions.
   
@@ -39,26 +44,31 @@ const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation')
 const BATCH_SIZE = 10000;
 
 /**
- * Generate a unique key for a street based on locality and geographic coordinates.
- * Format: "street|locality|lat|lon"
+ * Generate a unique key for a street based on geographic coordinates.
+ * Format: "street|lat|lon"
  * 
  * Uses coordinates rounded to 1 decimal place (~11km precision) to ensure proper
- * geographic separation of streets in different locations, even when admin data
- * (region/country) is missing from OSM tags.
+ * geographic separation of streets in different locations.
+ * 
+ * Locality is NOT used because:
+ * - It's often missing from OSM (addr:city tag)
+ * - WOF lookup happens only in Pass 2 (not available here)
+ * - Geographic coordinates alone provide reliable separation
+ * 
+ * This ensures all addresses on the same street in the same area are grouped together,
+ * regardless of whether they have addr:city tag or not.
  */
 function generateStreetKey(doc) {
   const street = doc.getAddress('street') || '';
-  
-  // Get locality from OSM tags first (available in Pass 1)
-  const tags = doc.getMeta('tags') || {};
-  const locality = tags['addr:city'] || _.get(doc, 'parent.locality[0]', '');
   
   // Get centroid and round to 1 decimal place (~11km precision)
   const centroid = doc.getCentroid();
   const lat = centroid && centroid.lat ? centroid.lat.toFixed(1) : '0.0';
   const lon = centroid && centroid.lon ? centroid.lon.toFixed(1) : '0.0';
   
-  return [street, locality, lat, lon]
+  // Key format: street|lat|lon
+  // All components lowercased for consistent matching
+  return [street, lat, lon]
     .map(s => String(s).trim().toLowerCase())
     .join('|');
 }
@@ -134,16 +144,14 @@ async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
             lon: existingAggregate.centroid.lon + bufferAggregate.centroid.lon,
             count: existingAggregate.centroid.count + bufferAggregate.centroid.count
           },
-          streetName: existingAggregate.streetName || bufferAggregate.streetName,
-          locality: existingAggregate.locality || bufferAggregate.locality
+          streetName: existingAggregate.streetName || bufferAggregate.streetName
         };
       } else {
         // New street - convert Set to sorted array
         finalAggregate = {
           numbers: Array.from(bufferAggregate.numbers).sort(naturalSort),
           centroid: bufferAggregate.centroid,
-          streetName: bufferAggregate.streetName,
-          locality: bufferAggregate.locality
+          streetName: bufferAggregate.streetName
         };
       }
 
@@ -210,12 +218,10 @@ module.exports = function() {
             let aggregate = buffer.get(streetKey);
             if (!aggregate) {
               // New street in buffer - create initial structure
-              const tags = doc.getMeta('tags') || {};
               aggregate = {
                 numbers: new Set(), // Use Set for automatic deduplication
                 centroid: { lat: 0, lon: 0, count: 0 },
-                streetName: doc.getAddress('street') || '',
-                locality: tags['addr:city'] || ''
+                streetName: doc.getAddress('street') || ''
               };
               buffer.set(streetKey, aggregate);
               totalStreetCount++; // May count duplicates across batches, but that's OK for logging
@@ -232,13 +238,7 @@ module.exports = function() {
               aggregate.centroid.count++;
             }
             
-            // Update admin data if available (keep first non-empty value)
-            const tags = doc.getMeta('tags') || {};
-            if (!aggregate.locality && tags['addr:city']) {
-              aggregate.locality = tags['addr:city'];
-            }
-            
-            // Update streetName if not set
+            // Update streetName if not set (preserve original capitalization)
             if (!aggregate.streetName && doc.getAddress('street')) {
               aggregate.streetName = doc.getAddress('street');
             }

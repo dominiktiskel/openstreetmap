@@ -75,12 +75,13 @@ When enabled (default: `true`), the importer uses a two-pass approach to collect
 - ✅ **Quick reference**: All house numbers on a street in one field
 - ✅ **Complex numbering**: Supports 22, 22a, 22b, 22/1, etc.
 - ✅ **Natural sorting**: 1, 2, 10 (not 1, 10, 2)
-- ✅ **Proper separation**: By full administrative hierarchy (street + city + region + country)
+- ✅ **Geographic separation**: By coordinates (0.1° ≈ 11km) - reliable and always available
 
-**Implementation** (v1.7.1):
+**Implementation** (v1.7.2):
 - **Pass 1**: Collects in buffer → Periodic batch write to LevelDB (every 10K addresses)
 - **Pass 2**: Enriches documents with aggregated data from LevelDB
-- **Key format**: `street|locality|lat.toFixed(1)|lon.toFixed(1)` (geographic separation)
+- **Key format**: `street|lat.toFixed(1)|lon.toFixed(1)` (coordinates only, ~11km precision)
+- **Aggregate**: `{ numbers: [...], centroid: {...}, streetName: "..." }`
 
 **Performance**:
 - Dolny Śląsk (500K addresses): ~10 MB RAM, +15% time
@@ -401,6 +402,103 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.7.2 (2025-12-23)
+
+**⚠️ BREAKING CHANGE: Simplified street key - locality removed**
+
+- 🔄 **BREAKING**: Street aggregation key changed from `street|locality|lat|lon` to `street|lat|lon`
+- 🐛 **FIX**: Addresses with missing `addr:city` now properly grouped with same street
+- ✅ **FIXED**: "aleja Akacjowa 12" (without addr:city) now merged with "aleja Akacjowa 10-12" (with addr:city)
+- 🎯 **SIMPLIFIED**: Coordinates alone provide reliable separation (~11km = 0.1° precision)
+- 🧪 **UPDATED**: All tests updated for new `street|lat|lon` key format
+- 📝 **REMOVED**: `locality` field from LevelDB aggregate structure
+
+**Root Cause:**
+
+OSM data is inconsistent - some features have `addr:city` tag, others don't:
+```xml
+<!-- Way 100928896 - NO addr:city -->
+<way id="100928896">
+  <tag k="addr:housenumber" v="12"/>
+  <tag k="addr:street" v="aleja Akacjowa"/>
+  <!-- Missing: addr:city -->
+</way>
+
+<!-- Node 1200733522 - HAS addr:city -->
+<node id="1200733522">
+  <tag k="addr:housenumber" v="10-12"/>
+  <tag k="addr:street" v="aleja Akacjowa"/>
+  <tag k="addr:city" v="Wrocław"/>  ✅
+</node>
+```
+
+**Previous behavior (v1.7.1):**
+```
+Key for way 100928896:  "aleja akacjowa||51.1|17.0"        (empty locality)
+Key for node 1200733522: "aleja akacjowa|wrocław|51.1|17.0" (with locality)
+→ TWO different groups! Same street split! 😱
+```
+
+**New behavior (v1.7.2):**
+```
+Key for way 100928896:  "aleja akacjowa|51.1|17.0"
+Key for node 1200733522: "aleja akacjowa|51.1|17.0"
+→ SAME group! All addresses properly aggregated! ✅
+```
+
+**Why coordinates alone are sufficient:**
+
+1. **Always available**: Every address has coordinates
+2. **0.1° precision (~11km)**: Perfect for distinguishing different areas
+3. **Consistent**: No dependency on incomplete OSM tagging
+4. **Simple**: Fewer components = fewer edge cases
+
+**Example: Wrocław**
+
+Before v1.7.2:
+```json
+GET /v1/autocomplete?text=aleja%20Akacjowa%2012,%20Wrocław
+→ Returns address, but house_numbers: "12" only (incomplete!)
+
+GET /v1/autocomplete?text=aleja%20Akacjowa,%20Wrocław
+→ Returns street, but house_numbers: "12" (missing 10-12, 3, 7, etc.)
+```
+
+After v1.7.2:
+```json
+GET /v1/autocomplete?text=aleja%20Akacjowa%2012,%20Wrocław
+→ Returns address, house_numbers: "3,7,10-12,11,11a,..." (complete!)
+
+GET /v1/autocomplete?text=aleja%20Akacjowa,%20Wrocław
+→ Returns street, house_numbers: "3,7,10-12,11,11a,..." (complete!)
+```
+
+**Migration:**
+
+This is a **BREAKING CHANGE**. Full reimport required:
+
+```bash
+# Update docker-compose.yml:
+image: tiskel/openstreetmap:v1.7.2
+
+# Reimport:
+pelias compose pull openstreetmap
+pelias compose down
+pelias elastic drop
+pelias elastic create
+pelias import osm
+```
+
+**Design Decision:**
+
+We evaluated several approaches:
+- ❌ **Distance-based clustering**: O(n²) complexity, order-dependent
+- ❌ **toFixed(2)**: Too granular (1.1km), causes boundary splits
+- ❌ **Keep locality with fallback**: WOF not available in Pass 1
+- ✅ **toFixed(1) without locality**: Simple, fast, deterministic
+
+---
 
 ### v1.7.1 (2025-12-23)
 

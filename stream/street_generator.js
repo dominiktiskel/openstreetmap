@@ -3,14 +3,19 @@
   
   This stream processor generates street documents from the aggregated data in LevelDB.
   It runs in the flush phase (after all addresses have been processed) to create one
-  street document per unique street (street|locality|region|country combination).
+  street document per unique street (street|lat|lon combination).
   
   Each street document includes:
   - layer: 'street'
-  - name: street name
+  - name: street name (original capitalization)
   - centroid: average of all address coordinates on that street
   - addendum.osm.house_numbers: comma-separated list of all house numbers
-  - parent hierarchy: locality, region, country
+  - parent hierarchy: populated by WOF adminLookup downstream
+  
+  Key Format (v1.7.2):
+  - "street|lat|lon" (e.g., "aleja akacjowa|51.1|17.0")
+  - Coordinates rounded to 0.1° (~11km)
+  - Locality NOT included (causes split groups when missing from OSM)
   
   @see: house_numbers_collector.js for data collection (Pass 1)
   @see: house_numbers_enricher.js for address enrichment (Pass 2)
@@ -114,13 +119,10 @@ module.exports = function() {
                 house_numbers: aggregate.numbers.join(',')
               });
 
-              // Add parent hierarchy
-              // Note: Only locality is stored in aggregate (from OSM tags).
-              // Full WOF hierarchy (region, county, country, localadmin, etc.) will be
-              // added by adminLookup() downstream when street documents pass through the pipeline.
-              if (aggregate.locality) {
-                streetDoc.addParent('locality', aggregate.locality, `osm:locality:${aggregate.locality.toLowerCase()}`);
-              }
+              // Parent hierarchy will be added by adminLookup() downstream
+              // when street documents pass through the WOF lookup pipeline.
+              // This ensures full hierarchy (locality, region, county, country, localadmin)
+              // is populated correctly for all street documents.
 
               // Push street document to pipeline
               self.push(streetDoc);
