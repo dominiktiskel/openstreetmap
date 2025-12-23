@@ -18,7 +18,8 @@ var tests = [
   require('./stream/stats'),
   require('./stream/tag_mapper'),
   require('./stream/addresses_without_street'),
-  require('./util/parseSemicolonDelimitedValues')
+  require('./util/parseSemicolonDelimitedValues'),
+  require('./util/expandHouseNumberRanges')
 ];
 
 tests.map(function(t) {

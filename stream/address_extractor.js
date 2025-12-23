@@ -28,7 +28,7 @@ const isObject = require('is-object');
 const extend = require('extend');
 const peliasLogger = require( 'pelias-logger' ).get( 'openstreetmap' );
 const Document = require('pelias-model').Document;
-const parseSemicolonDelimitedValues = require('../util/parseSemicolonDelimitedValues');
+const expandHouseNumberRanges = require('../util/expandHouseNumberRanges');
 
 function hasValidAddress( doc ){
   if( !isObject( doc ) ){ return false; }
@@ -46,9 +46,10 @@ module.exports = function(){
     const isNamedPoi = !!doc.getName('default');
     const isAddress = hasValidAddress( doc );
 
-    // accept semi-colon delimited house numbers
+    // expand house number ranges and separators (v1.8.0)
+    // Handles: semicolons (10;12), slashes (10/12), ranges (10-18)
     // ref: https://github.com/pelias/openstreetmap/issues/21
-    const streetNumbers = parseSemicolonDelimitedValues(doc.getAddress('number'));
+    const streetNumbers = expandHouseNumberRanges(doc.getAddress('number'));
 
     // create a new record for street addresses
     if( isAddress ){

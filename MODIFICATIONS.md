@@ -403,6 +403,128 @@ docker push tiskel/openstreetmap:v1.4.1
 
 ## Changelog
 
+### v1.8.0 (2025-12-23)
+
+**🎯 NEW FEATURE: House number range expansion**
+
+- ⭐ **NEW**: Automatic expansion of house number ranges (e.g., `10-12` → `10, 11, 12`)
+- 🔢 **SMART**: Parity-aware expansion for large ranges (even/odd street sides)
+- 🔀 **ENHANCED**: Support for multiple separators: `;` (semicolon), `/` (slash), `,` (comma)
+- ✅ **SEARCHABLE**: Searching for "Akacjowa 10" now finds address "10-12"
+- 🧪 **TESTED**: Comprehensive test suite with 60+ test cases
+
+**Problem Solved:**
+
+OSM often uses range notation for addresses (e.g., `addr:housenumber="10-12"`). Previously, Pelias imported this as a single document with number "10-12", making it **unsearchable** when users query for individual numbers like "10".
+
+**Before (v1.7.2):**
+```
+OSM: <tag k="addr:housenumber" v="10-12"/>
+Pelias: ONE document with housenumber="10-12"
+Search "Akacjowa 10": ❌ No results (looking for "10", found "10-12")
+```
+
+**After (v1.8.0):**
+```
+OSM: <tag k="addr:housenumber" v="10-12"/>
+Pelias: THREE documents with housenumber="10", "11", "12"
+Search "Akacjowa 10": ✅ Found! (exact match)
+```
+
+**Expansion Logic:**
+
+1. **Separators** (always split):
+   - `10;12` → `["10", "12"]`
+   - `10/12` → `["10", "12"]`
+   - `10,12` → `["10", "12"]`
+
+2. **Small ranges** (≤5 numbers, all included):
+   - `10-12` → `["10", "11", "12"]`
+   - `10-14` → `["10", "11", "12", "13", "14"]`
+
+3. **Large ranges** (>5 numbers, parity respected):
+   - `10-18` → `["10", "12", "14", "16", "18"]` (even only)
+   - `11-19` → `["11", "13", "15", "17", "19"]` (odd only)
+   - `10-20` → `["10", "12", "14", "16", "18", "20"]` (even only)
+
+**Why parity matters:**
+
+In most countries, even and odd house numbers are on opposite sides of the street. For large ranges (e.g., 10-20 = 11 numbers), expanding ALL numbers would create unnecessary documents. The parity rule respects real-world addressing:
+
+```
+Street layout:
+  11  13  15  17  19  (odd side)
+  ─────────────────────────────
+  10  12  14  16  18  (even side)
+```
+
+**Examples:**
+
+```javascript
+// Simple ranges
+"10-12" → ["10", "11", "12"]
+"5-8"   → ["5", "6", "7", "8"]
+
+// Large ranges (parity)
+"10-20" → ["10", "12", "14", "16", "18", "20"]  // even
+"11-21" → ["11", "13", "15", "17", "19", "21"]  // odd
+
+// Separators
+"10/12"   → ["10", "12"]
+"10;12"   → ["10", "12"]
+"10,12"   → ["10", "12"]
+
+// Mixed
+"10-12;20"    → ["10", "11", "12", "20"]
+"10-12/15"    → ["10", "11", "12", "15"]
+"1-5;10-14"   → ["1", "2", "3", "4", "5", "10", "11", "12", "13", "14"]
+
+// With suffixes
+"10a-12a" → ["10a", "11a", "12a"]
+"10a-18a" → ["10a", "12a", "14a", "16a", "18a"]  // parity + suffix
+```
+
+**Implementation:**
+
+- **New module**: `util/expandHouseNumberRanges.js`
+- **Modified**: `stream/address_extractor.js` - uses new expansion function
+- **Tests**: `test/util/expandHouseNumberRanges.js` (60+ test cases)
+
+**Migration:**
+
+This is **NOT a breaking change** - it's a new feature. Reimport recommended to take advantage of range expansion:
+
+```bash
+# Update docker-compose.yml:
+image: tiskel/openstreetmap:v1.8.0
+
+# Optional reimport (recommended for better search):
+pelias compose pull openstreetmap
+pelias import osm
+```
+
+**Testing with Wrocław example:**
+
+```bash
+# Before v1.8.0: No results
+GET /v1/autocomplete?text=aleja%20Akacjowa%2010,%20Wrocław
+→ { "features": [] }
+
+# After v1.8.0: Found!
+GET /v1/autocomplete?text=aleja%20Akacjowa%2010,%20Wrocław
+→ { "features": [
+  {
+    "properties": {
+      "housenumber": "10",
+      "street": "aleja Akacjowa",
+      "label": "aleja Akacjowa 10, Wrocław, DS, Poland"
+    }
+  }
+]}
+```
+
+---
+
 ### v1.7.2 (2025-12-23)
 
 **⚠️ BREAKING CHANGE: Simplified street key - locality removed**
