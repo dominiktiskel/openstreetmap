@@ -44,6 +44,11 @@ module.exports = function() {
   let enabled = ENABLE_AGGREGATION;
   let dbExists = false;
 
+  let addressCount = 0;
+  let checkedCount = 0;
+  let alreadyHasLocality = 0;
+  let noParentCount = 0;
+
   return through.obj(
     // Transform function - update LevelDB with parent hierarchy
     function(doc, enc, next) {
@@ -69,6 +74,18 @@ module.exports = function() {
 
         // Only process address documents
         if (doc.getLayer() === 'address') {
+          addressCount++;
+          
+          // Debug: Log first 3 addresses to see parent structure
+          if (addressCount <= 3) {
+            const parentLocality = doc.parent && doc.parent.locality;
+            peliasLogger.info(
+              '[admin_hierarchy_updater] Address #%d: street="%s", parent.locality=%j',
+              addressCount,
+              doc.getAddress('street'),
+              parentLocality
+            );
+          }
           const streetKey = generateStreetKey(doc);
           
           // Read aggregate from LevelDB
@@ -76,16 +93,31 @@ module.exports = function() {
             if (err || !aggregate || Array.isArray(aggregate)) {
               // Not found or old format - just pass through
               this.push(doc);
+              next();
               return;
             }
             
             if (!aggregate.osmAdmin) {
               // Old aggregate format - just pass through
               this.push(doc);
+              next();
               return;
             }
             
+            checkedCount++;
             let needsUpdate = false;
+            
+            // Debug: Log first 3 aggregates to see their state
+            if (checkedCount <= 3) {
+              const parentLocality = doc.parent && doc.parent.locality;
+              peliasLogger.info(
+                '[admin_hierarchy_updater] Aggregate #%d: street="%s", existing locality="%s", parent.locality=%j',
+                checkedCount,
+                aggregate.streetName,
+                aggregate.osmAdmin.locality || '(empty)',
+                parentLocality
+              );
+            }
             
             // Update locality if aggregate doesn't have it yet
             if (!aggregate.osmAdmin.locality || aggregate.osmAdmin.locality.trim() === '') {
@@ -93,7 +125,11 @@ module.exports = function() {
               if (parentLocality && parentLocality.trim()) {
                 aggregate.osmAdmin.locality = parentLocality;
                 needsUpdate = true;
+              } else {
+                noParentCount++;
               }
+            } else {
+              alreadyHasLocality++;
             }
             
             // Update region if aggregate doesn't have it yet
@@ -124,7 +160,7 @@ module.exports = function() {
                   
                   // Log first 5 updates
                   if (updatedCount <= 5) {
-                    peliasLogger.debug(
+                    peliasLogger.info(
                       '[admin_hierarchy_updater] Updated "%s" with locality="%s"',
                       aggregate.streetName,
                       aggregate.osmAdmin.locality
@@ -139,19 +175,20 @@ module.exports = function() {
               });
             }
             
-            // Push document downstream
+            // Push document downstream and call next
             this.push(doc);
+            next();
           });
         } else {
           // Non-address documents pass through immediately
           this.push(doc);
+          next();
         }
       } catch (e) {
         peliasLogger.error('[admin_hierarchy_updater] Error:', e);
         this.push(doc);
+        next();
       }
-
-      return next();
     },
     
     // Flush function
@@ -160,7 +197,14 @@ module.exports = function() {
         return done();
       }
 
-      peliasLogger.info('[admin_hierarchy_updater] Updated %d aggregates with parent hierarchy', updatedCount);
+      peliasLogger.info(
+        '[admin_hierarchy_updater] Stats: addresses=%d, checked=%d, updated=%d, already_has_locality=%d, no_parent=%d',
+        addressCount,
+        checkedCount,
+        updatedCount,
+        alreadyHasLocality,
+        noParentCount
+      );
 
       if (db) {
         db.close((err) => {

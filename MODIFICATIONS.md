@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.5
+## Version: v1.8.6
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.5`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.6`
 
 ## Key Features
 
@@ -402,6 +402,34 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.6 (2025-12-29)
+
+**🐛 DEBUG: Fix async callback + add debug logging**
+
+- ✅ **FIXED**: Moved `next()` inside `db.get()` callback (was called too early)
+- 🔍 **DEBUG**: Added detailed logging to diagnose why updates = 0
+- 📊 **STATS**: New log shows: addresses, checked, updated, already_has_locality, no_parent
+
+**Problem in v1.8.5:**
+
+The `next()` callback was called **before** the async `db.get()` completed, causing:
+- Stream finished before LevelDB operations completed
+- Updates were never persisted
+- Counter showed 0 updates
+
+**Debug Logs Added:**
+
+```
+[admin_hierarchy_updater] Address #1: street="X", parent.locality=["Y"]
+[admin_hierarchy_updater] Aggregate #1: street="X", existing locality="...", parent.locality=["Y"]
+[admin_hierarchy_updater] Stats: addresses=N, checked=M, updated=K, already_has_locality=L, no_parent=P
+```
+
+This will help identify:
+1. If `doc.parent.locality` exists
+2. If aggregates already have locality from Pass 1
+3. If updates are actually happening
 
 ### v1.8.5 (2025-12-29)
 
