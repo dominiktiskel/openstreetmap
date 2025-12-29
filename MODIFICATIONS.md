@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.11
+## Version: v1.8.12
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.11`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.12`
 
 ## Key Features
 
@@ -402,6 +402,17 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.12 (2025-12-29)
+
+**🧹 Cleanup: Removed debug logs**
+
+- 🧹 **REMOVED**: All debug logs from `admin_hierarchy_updater`
+- 📊 **SIMPLIFIED**: Final stats log to show only essential info: "Updated N/M aggregates"
+- ✅ **STABLE**: Production-ready version with clean logs
+
+**Files Changed:**
+- `stream/admin_hierarchy_updater.js` - Removed debug logging
 
 ### v1.8.11 (2025-12-29)
 

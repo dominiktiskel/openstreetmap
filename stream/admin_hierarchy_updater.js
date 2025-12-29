@@ -69,17 +69,6 @@ module.exports = function() {
           const parentRegion = doc.parent && doc.parent.region && doc.parent.region[0];
           const parentCountry = doc.parent && doc.parent.country && doc.parent.country[0];
           
-          // Debug: Log first 3 addresses
-          if (addressCount <= 3) {
-            peliasLogger.info(
-              '[admin_hierarchy_updater] Address #%d: street="%s", approx_key="%s", parent.locality=%j',
-              addressCount,
-              doc.getAddress('street'),
-              approximateKey,
-              doc.parent && doc.parent.locality
-            );
-          }
-          
           // Collect parent hierarchy for this approximate street key
           // Use first non-empty value (priority: first address wins)
           if (parentLocality || parentRegion || parentCountry) {
@@ -129,34 +118,21 @@ module.exports = function() {
         return done();
       }
 
-      peliasLogger.info(
-        '[admin_hierarchy_updater] Collected parent hierarchy for %d approximate street keys from %d addresses',
-        parentHierarchyMap.size,
-        addressCount
-      );
-
       // Open LevelDB (enricher has closed it by now)
-      peliasLogger.info('[admin_hierarchy_updater] Opening LevelDB at: %s', DB_PATH);
       const db = new Level(DB_PATH, { valueEncoding: 'json' });
       
       let checked = 0;
       let updated = 0;
       let alreadyHasLocality = 0;
       let notMatched = 0;
-      let iteratorStarted = false;
 
       // Update all aggregates (use async IIFE with proper await)
       const updateAggregates = async () => {
         try {
           // Explicitly open the database before iterating
           await db.open();
-          peliasLogger.info('[admin_hierarchy_updater] LevelDB opened successfully, starting iteration...');
           
           for await (const [actualKey, aggregate] of db.iterator()) {
-            if (!iteratorStarted) {
-              iteratorStarted = true;
-              peliasLogger.info('[admin_hierarchy_updater] Iterator started, processing first key: "%s"', actualKey);
-            }
             try {
               if (!aggregate || Array.isArray(aggregate) || !aggregate.osmAdmin) {
                 continue;
@@ -172,26 +148,7 @@ module.exports = function() {
               
               if (!parentHierarchy) {
                 notMatched++;
-                if (notMatched <= 3) {
-                  peliasLogger.info(
-                    '[admin_hierarchy_updater] No parent data for key "%s" (street: %s)',
-                    actualKey,
-                    aggregate.streetName
-                  );
-                }
                 continue;
-              }
-              
-              // Debug: Log first 3 matched aggregates
-              if (checked <= 3) {
-                peliasLogger.info(
-                  '[admin_hierarchy_updater] Aggregate #%d: key="%s", street="%s", existing locality="%s", new locality="%s"',
-                  checked,
-                  actualKey,
-                  aggregate.streetName,
-                  aggregate.osmAdmin.locality || '(empty)',
-                  parentHierarchy.locality
-                );
               }
               
               let needsUpdate = false;
@@ -226,15 +183,6 @@ module.exports = function() {
               if (needsUpdate) {
                 await db.put(actualKey, aggregate);
                 updated++;
-                
-                // Log first 5 updates
-                if (updated <= 5) {
-                  peliasLogger.info(
-                    '[admin_hierarchy_updater] Updated "%s" with locality="%s"',
-                    aggregate.streetName,
-                    aggregate.osmAdmin.locality
-                  );
-                }
               }
             } catch (err) {
               peliasLogger.error('[admin_hierarchy_updater] Error processing key "%s": %s', actualKey, err.message);
@@ -242,19 +190,13 @@ module.exports = function() {
           }
           
           peliasLogger.info(
-            '[admin_hierarchy_updater] Stats: addresses=%d, collected_keys=%d, db_aggregates=%d, checked=%d, updated=%d, already_has_locality=%d, not_matched=%d',
-            addressCount,
-            parentHierarchyMap.size,
-            checked,
-            checked,
+            '[admin_hierarchy_updater] Updated %d/%d aggregates with parent hierarchy from WOF',
             updated,
-            alreadyHasLocality,
-            notMatched
+            checked
           );
           
           // Close database
           await db.close();
-          peliasLogger.info('[admin_hierarchy_updater] Database closed (ready for street_generator)');
         } catch (e) {
           peliasLogger.error('[admin_hierarchy_updater] Fatal error:', e);
           if (db) {
