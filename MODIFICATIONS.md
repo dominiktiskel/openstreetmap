@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.10
+## Version: v1.8.11
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.10`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.11`
 
 ## Key Features
 
@@ -402,6 +402,52 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.11 (2025-12-29)
+
+**🐛 CRITICAL FIX: Collector now saves `osmAdmin` to LevelDB**
+
+- ✅ **FIXED**: Aggregates in LevelDB now have `osmAdmin` field
+- 🎯 **ROOT CAUSE**: Collector collected `osmAdmin` in buffer but didn't save to LevelDB during flush
+- 📊 **RESULT**: `admin_hierarchy_updater` can now update aggregates (was skipping all due to missing field)
+
+**Problem in v1.8.10:**
+
+```
+[admin_hierarchy_updater] Iterator started, processing first key: "..."
+[admin_hierarchy_updater] Stats: checked=0, updated=0
+```
+
+**Root cause:** `house_numbers_collector` in Pass 1:
+1. ✅ Collected `osmAdmin` from OSM tags (`addr:city`, `addr:state`) into **buffer**
+2. ❌ But `flushBuffer()` **didn't save** `osmAdmin` to final aggregate in LevelDB
+3. Result: All aggregates in LevelDB had **NO `osmAdmin` field**
+4. `admin_hierarchy_updater` checked `if (!aggregate.osmAdmin)` and **skipped all** records
+
+**Solution (v1.8.11):**
+
+Modified `flushBuffer()` in `house_numbers_collector.js`:
+
+```javascript
+finalAggregate = {
+  numbers: [...],
+  centroid: {...},
+  streetName: "...",
+  osmAdmin: {  // ⭐ NOW SAVED TO LEVELDB!
+    locality: bufferAggregate.osmAdmin?.locality || '',
+    region: bufferAggregate.osmAdmin?.region || '',
+    country: bufferAggregate.osmAdmin?.country || ''
+  }
+};
+```
+
+**Priority maintained:**
+- Pass 1: Save `osmAdmin` from OSM tags if present
+- Pass 2: Update `osmAdmin` from WOF if still empty
+- Street generation: Use `osmAdmin` with correct priority
+
+**Files Changed:**
+- `stream/house_numbers_collector.js` - Added `osmAdmin` to `finalAggregate` in `flushBuffer()`
 
 ### v1.8.10 (2025-12-29)
 

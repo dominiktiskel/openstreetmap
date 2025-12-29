@@ -144,14 +144,24 @@ async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
             lon: existingAggregate.centroid.lon + bufferAggregate.centroid.lon,
             count: existingAggregate.centroid.count + bufferAggregate.centroid.count
           },
-          streetName: existingAggregate.streetName || bufferAggregate.streetName
+          streetName: existingAggregate.streetName || bufferAggregate.streetName,
+          osmAdmin: {
+            locality: existingAggregate.osmAdmin?.locality || bufferAggregate.osmAdmin?.locality || '',
+            region: existingAggregate.osmAdmin?.region || bufferAggregate.osmAdmin?.region || '',
+            country: existingAggregate.osmAdmin?.country || bufferAggregate.osmAdmin?.country || ''
+          }
         };
       } else {
         // New street - convert Set to sorted array
         finalAggregate = {
           numbers: Array.from(bufferAggregate.numbers).sort(naturalSort),
           centroid: bufferAggregate.centroid,
-          streetName: bufferAggregate.streetName
+          streetName: bufferAggregate.streetName,
+          osmAdmin: {
+            locality: bufferAggregate.osmAdmin?.locality || '',
+            region: bufferAggregate.osmAdmin?.region || '',
+            country: bufferAggregate.osmAdmin?.country || ''
+          }
         };
       }
 
