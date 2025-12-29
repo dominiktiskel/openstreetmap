@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.2
+## Version: v1.8.4
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.2`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.4`
 
 ## Key Features
 
@@ -402,6 +402,84 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.4 (2025-12-29)
+
+**🎯 FIX: Street documents now inherit admin hierarchy from addresses**
+
+- ✅ **FIXED**: Street documents now get `locality` (and region/country) from their addresses
+- 🔧 **IMPROVED**: `house_numbers_enricher` updates LevelDB aggregates with parent hierarchy from WOF
+- 🐛 **PROBLEM SOLVED**: Streets without OSM `addr:city` tags now get locality from WOF admin lookup
+- 📍 **PRIORITY**: OSM tags (addr:city) > Address parent (WOF) > WOF lookup on street centroid
+
+**Problem:**
+
+Street documents generated from addresses were missing `locality` field even though their source addresses had it. This happened because:
+
+1. **Pass 1** (collector): Only OSM tags `addr:city` were captured in aggregate
+2. **Pass 2** (enricher): Addresses got `parent.locality` from WOF, but aggregate wasn't updated
+3. **Street generation**: Used old aggregate without WOF-enriched parent hierarchy
+
+**Solution (v1.8.4):**
+
+`house_numbers_enricher.js` now updates LevelDB aggregates with parent hierarchy:
+
+```javascript
+// If aggregate doesn't have locality from Pass 1 (addr:city)
+if (!aggregate.osmAdmin.locality) {
+  // Use parent.locality from wof-admin-lookup (executed before enricher)
+  const parentLocality = doc.parent.locality[0];
+  aggregate.osmAdmin.locality = parentLocality;
+  db.put(streetKey, aggregate); // Update LevelDB
+}
+```
+
+**Result:**
+
+Street documents now inherit locality from their addresses with proper priority:
+1. OSM tag `addr:city` (if any address has it)
+2. WOF parent from first enriched address
+3. WOF lookup on street centroid (fallback)
+
+**Example:**
+
+Before v1.8.4:
+```json
+{
+  "name": "Szkutnicza",
+  "borough": "Widawa",
+  "label": "Szkutnicza"  // Missing locality!
+}
+```
+
+After v1.8.4:
+```json
+{
+  "name": "Szkutnicza",
+  "locality": "Wrocław",  // ✅ Inherited from addresses
+  "borough": "Widawa",
+  "label": "Szkutnicza, Wrocław"
+}
+```
+
+---
+
+### v1.8.3 (2025-12-29)
+
+**🔧 DEPENDENCY: Use custom wof-admin-lookup from GitHub**
+
+- 📦 **CHANGED**: Use `github:dominiktiskel/wof-admin-lookup#custom` instead of npm package
+- ✨ **NEW**: Support for OSM boundaries SQLite databases (tools/osm-to-wof-sqlite.js)
+- 🗺️ **NEW**: Generate custom WOF-compatible SQLite from OSM admin boundaries
+- ✅ **COMPATIBLE**: WOF SQLite schema with `geojson` + `spr` + `ancestors` tables
+
+**Changes:**
+
+- Updated `package.json` to use GitHub fork of wof-admin-lookup
+- Enables OSM boundaries tools for up-to-date Polish admin data
+- Full schema compatibility with pelias-whosonfirst SQLiteStream
+
+---
 
 ### v1.8.2 (2025-12-23)
 
