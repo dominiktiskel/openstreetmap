@@ -143,7 +143,7 @@ module.exports = function() {
       return next();
     },
     
-    // Flush function - close database (cleanup happens in street_generator)
+    // Flush function - MUST close database so admin_hierarchy_updater can open it
     function(done) {
       if (!enabled || !dbExists) {
         return done();
@@ -155,12 +155,13 @@ module.exports = function() {
         missedCount
       );
 
+      // MUST close db so admin_hierarchy_updater can open a new instance
       if (db) {
         db.close((err) => {
           if (err) {
             peliasLogger.error('[house_numbers_enricher] Error closing database:', err);
           } else {
-            peliasLogger.info('[house_numbers_enricher] Database closed (will be cleaned up by street_generator)');
+            peliasLogger.info('[house_numbers_enricher] Database closed (ready for admin_hierarchy_updater)');
           }
           done();
         });

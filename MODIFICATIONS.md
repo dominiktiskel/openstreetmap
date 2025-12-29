@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.7
+## Version: v1.8.8
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.7`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.8`
 
 ## Key Features
 
@@ -402,6 +402,53 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.8 (2025-12-29)
+
+**✅ FIX: Move admin_hierarchy_updater to FLUSH phase**
+
+- ✅ **FIXED**: `LEVEL_DATABASE_NOT_OPEN` error resolved
+- 🔧 **REDESIGNED**: `admin_hierarchy_updater` now collects data in transform, updates in flush
+- 📊 **IMPROVED**: No more concurrent LevelDB access conflicts
+
+**Problem in v1.8.7:**
+
+```
+[admin_hierarchy_updater] Looking up key: ... (error: LEVEL_DATABASE_NOT_OPEN)
+```
+
+Stream processors run **in parallel** in the pipeline! When `admin_hierarchy_updater` tried to open LevelDB in its transform phase, `house_numbers_enricher` still had it open, causing a lock conflict.
+
+**Solution (v1.8.8):**
+
+Rewrote `admin_hierarchy_updater` to work in **2 phases**:
+
+1. **Transform phase**: Collect `parent.locality/region/country` from each address into a Map
+   - No LevelDB access
+   - Just stores: `streetKey -> {locality, region, country}`
+
+2. **Flush phase**: Update all aggregates at once
+   - Opens LevelDB (enricher has closed it by now)
+   - Iterates through Map, updates aggregates
+   - Closes LevelDB (ready for street_generator)
+
+**Timeline:**
+
+```
+Transform phase (parallel):
+  house_numbers_enricher    → reads from LevelDB
+  adminLookup               → adds doc.parent.*
+  admin_hierarchy_updater   → collects parent.* to Map (no DB access!)
+  
+Flush phase (sequential):
+  house_numbers_enricher    → closes LevelDB ✅
+  admin_hierarchy_updater   → opens LevelDB, updates, closes ✅
+  street_generator          → opens LevelDB, generates streets, closes & deletes ✅
+```
+
+**Files Changed:**
+- `stream/admin_hierarchy_updater.js` - Complete rewrite: collect in transform, update in flush
+- `stream/house_numbers_enricher.js` - Restored DB close in flush
 
 ### v1.8.7 (2025-12-29)
 
