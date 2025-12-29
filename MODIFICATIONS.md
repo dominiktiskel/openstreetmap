@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.8
+## Version: v1.8.9
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.8`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.9`
 
 ## Key Features
 
@@ -402,6 +402,47 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.9 (2025-12-29)
+
+**✅ FIX: Match LevelDB keys correctly - iterate DB not collected keys**
+
+- ✅ **FIXED**: `not_found=224` - keys now match correctly
+- 🔧 **CHANGED**: Flush phase now iterates through **actual LevelDB keys**, not collected map
+- 📊 **IMPROVED**: Groups addresses by approximate key, then matches with DB keys
+
+**Problem in v1.8.8:**
+
+```
+[admin_hierarchy_updater] Stats: streets_to_update=224, checked=0, updated=0, not_found=224
+```
+
+**Root cause:** Each address generated a **unique key** based on its own coordinates:
+- Address #4 on Pełczyńska: key = `"pełczyńska|51.160|17.007"` (coords of THIS address)
+- Address #5 on Pełczyńska: key = `"pełczyńska|51.161|17.008"` (coords of THIS address - DIFFERENT!)
+
+But LevelDB stores keys with **centroid** (average of all addresses):
+- Aggregate in LevelDB: key = `"pełczyńska|51.16|17.01"` (average/rounded coords)
+
+Result: **No keys matched!** `parentHierarchyMap` had 3471 unique keys (one per address), but none existed in LevelDB.
+
+**Solution (v1.8.9):**
+
+**Transform phase:**
+- Group addresses by **approximate street key** (street + rounded coords to 2 decimals)
+- Store: `Map<approximateKey, {locality, region, country, count}>`
+- Multiple addresses on same street → same approximate key
+
+**Flush phase:**
+- **Iterate through actual LevelDB keys** (not collected map keys!)
+- For each DB key, lookup collected parent hierarchy
+- Match: `actualKeyFromDB === approximateKeyFromAddress`
+- Update aggregate if matched
+
+**Key insight:** Addresses and aggregates use the **same rounding** (2 decimals), so approximate keys match DB keys directly!
+
+**Files Changed:**
+- `stream/admin_hierarchy_updater.js` - Iterate DB keys, not collected map keys
 
 ### v1.8.8 (2025-12-29)
 
