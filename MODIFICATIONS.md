@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.4
+## Version: v1.8.5
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.4`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.5`
 
 ## Key Features
 
@@ -402,6 +402,49 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.5 (2025-12-29)
+
+**🐛 CRITICAL FIX: Corrected pipeline order for street admin hierarchy**
+
+- ✅ **FIXED**: Pipeline reordered so `adminLookup` runs BEFORE `adminHierarchyUpdater`
+- 🔧 **IMPROVED**: Created dedicated `admin_hierarchy_updater` stream processor
+- 🎯 **RESOLVED**: Streets now correctly inherit `locality` from addresses
+- 📊 **LOGS**: New logs show "Updated N aggregates with parent hierarchy"
+
+**Problem in v1.8.4:**
+
+The fix in v1.8.4 attempted to update LevelDB aggregates in `house_numbers_enricher`, but this stream ran **BEFORE** `adminLookup`. This meant:
+- `doc.parent.locality` didn't exist yet when enricher ran
+- Aggregates were never updated (logs showed "0 admin updated")
+- Streets still had no `locality` field
+
+**Solution (v1.8.5):**
+
+1. **New stream processor**: `admin_hierarchy_updater.js` - dedicated to updating aggregates
+2. **Correct pipeline order**:
+   ```
+   houseNumbersEnricher   → add house_numbers to addresses
+   adminLookup            → add parent.locality to addresses (WOF/OSM)
+   adminHierarchyUpdater  → UPDATE aggregates with parent hierarchy ⭐ NEW
+   streetGenerator        → read aggregates (now with locality!)
+   ```
+3. **Result**: Streets inherit locality from their addresses correctly
+
+**Pipeline Changes:**
+
+```javascript
+// stream/importPipeline.js
+.pipe( streams.osmAdminExtractor() )
+.pipe( streams.adminLookup() )           // Adds doc.parent.*
+.pipe( streams.adminHierarchyUpdater() ) // ⭐ NEW: Updates LevelDB with parent
+.pipe( streams.streetGenerator() )       // Reads updated aggregates
+```
+
+**Files Changed:**
+- `stream/admin_hierarchy_updater.js` - NEW: Dedicated stream for updating aggregates
+- `stream/importPipeline.js` - Reordered pipeline
+- `stream/house_numbers_enricher.js` - Removed admin update logic (moved to new processor)
 
 ### v1.8.4 (2025-12-29)
 

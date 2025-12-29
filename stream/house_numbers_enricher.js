@@ -56,7 +56,6 @@ module.exports = function() {
   let db;
   let enrichedCount = 0;
   let missedCount = 0;
-  let adminUpdatedCount = 0;
   let enabled = ENABLE_AGGREGATION;
   let dbExists = false;
 
@@ -111,66 +110,11 @@ module.exports = function() {
             const numbers = Array.isArray(aggregate) ? aggregate : aggregate.numbers;
             
             if (numbers && numbers.length > 0) {
-              // 1. Add addendum (existing behavior)
+              // Add addendum with house numbers
               const existingAddendum = doc.getAddendum('osm') || {};
               existingAddendum.house_numbers = numbers.join(',');
               doc.setAddendum('osm', existingAddendum);
               enrichedCount++;
-
-              // 2. NEW (v1.8.4): Update aggregate with parent hierarchy from enriched address
-              // Priority: OSM tags (addr:city) > WOF/OSM boundaries > nothing
-              // If aggregate already has locality from Pass 1 (addr:city tag), keep it
-              // Otherwise, use parent.locality from wof-admin-lookup (executed before this)
-              if (!Array.isArray(aggregate) && aggregate.osmAdmin) {
-                let needsUpdate = false;
-                
-                // Update locality if aggregate doesn't have it yet
-                if (!aggregate.osmAdmin.locality || aggregate.osmAdmin.locality.trim() === '') {
-                  const parentLocality = doc.parent && doc.parent.locality && doc.parent.locality[0];
-                  if (parentLocality && parentLocality.trim()) {
-                    aggregate.osmAdmin.locality = parentLocality;
-                    needsUpdate = true;
-                  }
-                }
-                
-                // Update region if aggregate doesn't have it yet
-                if (!aggregate.osmAdmin.region || aggregate.osmAdmin.region.trim() === '') {
-                  const parentRegion = doc.parent && doc.parent.region && doc.parent.region[0];
-                  if (parentRegion && parentRegion.trim()) {
-                    aggregate.osmAdmin.region = parentRegion;
-                    needsUpdate = true;
-                  }
-                }
-                
-                // Update country if aggregate doesn't have it yet
-                if (!aggregate.osmAdmin.country || aggregate.osmAdmin.country.trim() === '') {
-                  const parentCountry = doc.parent && doc.parent.country && doc.parent.country[0];
-                  if (parentCountry && parentCountry.trim()) {
-                    aggregate.osmAdmin.country = parentCountry;
-                    needsUpdate = true;
-                  }
-                }
-                
-                // Write back to LevelDB if updated
-                if (needsUpdate) {
-                  db.put(streetKey, aggregate, (putErr) => {
-                    if (putErr) {
-                      peliasLogger.error('[house_numbers_enricher] Failed to update aggregate:', putErr);
-                    } else {
-                      adminUpdatedCount++;
-                      
-                      // Debug log first 10 updates
-                      if (adminUpdatedCount <= 10) {
-                        peliasLogger.debug(
-                          '[house_numbers_enricher] Updated aggregate for street "%s" with locality="%s"',
-                          aggregate.streetName || streetKey,
-                          aggregate.osmAdmin.locality
-                        );
-                      }
-                    }
-                  });
-                }
-              }
 
               // Log progress every 10K documents
               if (enrichedCount % 10000 === 0) {
@@ -206,9 +150,8 @@ module.exports = function() {
       }
 
       peliasLogger.info(
-        '[house_numbers_enricher] Pass 2 complete: %d enriched, %d admin updated, %d not found',
+        '[house_numbers_enricher] Pass 2 complete: %d enriched, %d not found',
         enrichedCount,
-        adminUpdatedCount,
         missedCount
       );
 
