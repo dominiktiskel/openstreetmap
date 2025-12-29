@@ -48,6 +48,9 @@ module.exports = function() {
   let checkedCount = 0;
   let alreadyHasLocality = 0;
   let noParentCount = 0;
+  let dbGetCalls = 0;
+  let dbGetErrors = 0;
+  let dbGetNulls = 0;
 
   return through.obj(
     // Transform function - update LevelDB with parent hierarchy
@@ -88,10 +91,36 @@ module.exports = function() {
           }
           const streetKey = generateStreetKey(doc);
           
+          // Debug: Log first 3 keys
+          if (addressCount <= 3) {
+            peliasLogger.info('[admin_hierarchy_updater] Looking up key: "%s"', streetKey);
+          }
+          
           // Read aggregate from LevelDB
           db.get(streetKey, (err, aggregate) => {
-            if (err || !aggregate || Array.isArray(aggregate)) {
-              // Not found or old format - just pass through
+            dbGetCalls++;
+            
+            if (err) {
+              dbGetErrors++;
+              // Debug: Log first 3 errors
+              if (dbGetErrors <= 3) {
+                peliasLogger.info('[admin_hierarchy_updater] Key not found: "%s" (error: %s)', streetKey, err.code || err.message);
+              }
+              this.push(doc);
+              next();
+              return;
+            }
+            
+            if (!aggregate || Array.isArray(aggregate)) {
+              dbGetNulls++;
+              // Debug: Log first 3 issues
+              if (dbGetNulls <= 3) {
+                peliasLogger.info(
+                  '[admin_hierarchy_updater] Invalid aggregate for key "%s": %j',
+                  streetKey,
+                  aggregate
+                );
+              }
               this.push(doc);
               next();
               return;
@@ -198,8 +227,11 @@ module.exports = function() {
       }
 
       peliasLogger.info(
-        '[admin_hierarchy_updater] Stats: addresses=%d, checked=%d, updated=%d, already_has_locality=%d, no_parent=%d',
+        '[admin_hierarchy_updater] Stats: addresses=%d, db_get_calls=%d, db_errors=%d, db_nulls=%d, checked=%d, updated=%d, already_has_locality=%d, no_parent=%d',
         addressCount,
+        dbGetCalls,
+        dbGetErrors,
+        dbGetNulls,
         checkedCount,
         updatedCount,
         alreadyHasLocality,

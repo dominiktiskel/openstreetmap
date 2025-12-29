@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.6
+## Version: v1.8.7
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.6`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.7`
 
 ## Key Features
 
@@ -402,6 +402,36 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.7 (2025-12-29)
+
+**🔍 DEBUG: Extended logging for LevelDB lookup**
+
+- 🔍 **ADDED**: Log streetKey for first 3 addresses
+- 🔍 **ADDED**: Log db.get() errors with error codes
+- 🔍 **ADDED**: Log invalid aggregates (null/array)
+- 📊 **STATS**: Added `db_get_calls`, `db_errors`, `db_nulls` to final stats
+
+**Problem in v1.8.6:**
+
+Logs showed `checked=0` which means `db.get()` never returned valid aggregates. Possible causes:
+1. LevelDB is empty
+2. streetKey doesn't match keys in LevelDB
+3. Aggregates are in wrong format (array/null)
+
+**New Debug Logs:**
+
+```
+[admin_hierarchy_updater] Looking up key: "szkutnicza|51.10|17.09"
+[admin_hierarchy_updater] Key not found: "..." (error: NotFoundError)
+[admin_hierarchy_updater] Invalid aggregate for key "...": null
+[admin_hierarchy_updater] Stats: db_get_calls=3471, db_errors=3247, db_nulls=0, checked=224
+```
+
+This will show:
+- Exact streetKey format being used
+- How many db.get() calls were made
+- How many returned errors vs null vs valid aggregates
 
 ### v1.8.6 (2025-12-29)
 
