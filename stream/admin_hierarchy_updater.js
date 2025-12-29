@@ -136,17 +136,27 @@ module.exports = function() {
       );
 
       // Open LevelDB (enricher has closed it by now)
+      peliasLogger.info('[admin_hierarchy_updater] Opening LevelDB at: %s', DB_PATH);
       const db = new Level(DB_PATH, { valueEncoding: 'json' });
       
       let checked = 0;
       let updated = 0;
       let alreadyHasLocality = 0;
       let notMatched = 0;
+      let iteratorStarted = false;
 
-      // Iterate through ALL keys in LevelDB and match with collected data
-      (async () => {
+      // Update all aggregates (use async IIFE with proper await)
+      const updateAggregates = async () => {
         try {
+          // Explicitly open the database before iterating
+          await db.open();
+          peliasLogger.info('[admin_hierarchy_updater] LevelDB opened successfully, starting iteration...');
+          
           for await (const [actualKey, aggregate] of db.iterator()) {
+            if (!iteratorStarted) {
+              iteratorStarted = true;
+              peliasLogger.info('[admin_hierarchy_updater] Iterator started, processing first key: "%s"', actualKey);
+            }
             try {
               if (!aggregate || Array.isArray(aggregate) || !aggregate.osmAdmin) {
                 continue;
@@ -245,15 +255,23 @@ module.exports = function() {
           // Close database
           await db.close();
           peliasLogger.info('[admin_hierarchy_updater] Database closed (ready for street_generator)');
-          done();
         } catch (e) {
           peliasLogger.error('[admin_hierarchy_updater] Fatal error:', e);
           if (db) {
-            await db.close();
+            try {
+              await db.close();
+            } catch (closeErr) {
+              // Ignore close errors
+            }
           }
-          done(e);
+          throw e;
         }
-      })();
+      };
+
+      // Execute async update and call done when complete
+      updateAggregates()
+        .then(() => done())
+        .catch((err) => done(err));
     }
   );
 };

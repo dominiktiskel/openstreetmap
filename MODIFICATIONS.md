@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.9
+## Version: v1.8.10
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.9`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.10`
 
 ## Key Features
 
@@ -402,6 +402,52 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.10 (2025-12-29)
+
+**✅ FIX: Properly await async operations in flush phase**
+
+- ✅ **FIXED**: `db_aggregates=0` - async IIFE wasn't awaited before calling `done()`
+- 🔧 **IMPROVED**: Added `await db.open()` before iteration
+- 📊 **ADDED**: Debug logs to track iterator execution
+
+**Problem in v1.8.9:**
+
+The async IIFE in flush() executed but `done()` was called immediately without waiting:
+
+```javascript
+(async () => {
+  // ... async operations ...
+  done();  // ← Called inside IIFE
+})();  // ← IIFE started but NOT awaited!
+// Function returns immediately!
+```
+
+Result: Iterator never executed, `checked=0`, `updated=0`
+
+**Solution (v1.8.10):**
+
+Changed to proper async/await pattern:
+
+```javascript
+const updateAggregates = async () => {
+  await db.open();  // Explicitly open DB
+  for await (const [key, aggregate] of db.iterator()) {
+    // ... process ...
+  }
+  await db.close();
+};
+
+// Properly await before calling done()
+updateAggregates()
+  .then(() => done())
+  .catch((err) => done(err));
+```
+
+Now the flush function waits for async operations to complete before calling `done()`.
+
+**Files Changed:**
+- `stream/admin_hierarchy_updater.js` - Fixed async flow, added explicit `db.open()` and debug logs
 
 ### v1.8.9 (2025-12-29)
 
