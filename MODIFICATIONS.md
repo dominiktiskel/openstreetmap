@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.9.4
+## Version: v1.9.5
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.9.4`
+- **Docker Image**: `tiskel/openstreetmap:v1.9.5`
 
 ## Key Features
 
@@ -403,9 +403,61 @@ docker push tiskel/openstreetmap:v1.4.1
 
 ## Changelog
 
+### v1.9.5 (2025-12-31)
+
+**⏱️ CRITICAL FIX: Race condition between Pass 1 and Pass 2**
+
+**Problem in v1.9.4:**
+```
+Error: IO error: lock /tmp/pelias-venues-v2/LOCK: already held by process
+code: LEVEL_LOCKED
+```
+
+Even with separate databases, still getting LEVEL_LOCKED!
+
+**Root Cause - Race Condition:**
+```
+Timeline:
+1. Pass 1 pipeline emits 'finish' event
+2. Pass 1 callback fires → Pass 2 starts immediately
+3. Pass 2 tries to open venues DB (async)
+4. venue_collector_v2 STILL in flush phase → DB still open!
+5. LEVEL_LOCKED error → crash
+```
+
+The problem: **Pipeline 'finish' fires BEFORE collector flush completes!**
+
+**Solution:**
+1. **`stream/venue_collector_v2.js`**
+   - ALWAYS close DB in flush (even if buffer is empty)
+   - Add explicit logging: "Database closed successfully"
+   - Ensures no leaked DB connections
+
+2. **`stream/importPipelineV2.js`**
+   - Add **2 second delay** between Pass 1 finish and Pass 2 start
+   - `setTimeout(() => callback(), 2000)`
+   - Gives collectors time to flush buffers and close DBs
+
+**Why 2 seconds?**
+- Flush typically takes ~100-500ms
+- 2 seconds provides safe margin
+- Not elegant, but reliable!
+
+**Better Alternative (future):**
+- Promise-based flush coordination
+- Explicit "DB closed" events
+- Requires larger refactor
+
+**Result:**
+- ✅ Pass 1 collectors fully close DBs
+- ✅ Pass 2 waits before opening DBs
+- ✅ No more LEVEL_LOCKED race conditions!
+
+---
+
 ### v1.9.4 (2025-12-31)
 
-**🔒 CRITICAL FIX: LevelDB locking conflict - separate databases**
+**🔒 CRITICAL FIX: LevelDB locking conflict - separate databases** (still had race condition, fixed in v1.9.5)
 
 **Problem in v1.9.3:**
 ```
