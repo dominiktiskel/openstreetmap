@@ -8,18 +8,24 @@
  * 1. Streets DB (pelias-house-numbers-aggregation-v2):
  *    - Aggregated addresses by street|city|lat|lon
  *    - Generates ONE street document per key with house_numbers
+ *    - ALSO generates individual address documents for each house number
  *    - Full admin hierarchy from aggregate.osmAdmin
  * 
  * 2. Venues DB (pelias-venues-v2):
  *    - Individual venue/POI documents
  *    - Full admin hierarchy from venueData.parent
  * 
+ * Generated document types:
+ * - Streets: layer='street' with house_numbers in addendum
+ * - Addresses: layer='address' for specific house numbers (e.g., "Szkutnicza 10")
+ * - Venues/POI: layer='venue' for points of interest
+ * 
  * Using separate databases prevents LEVEL_LOCKED errors from concurrent access!
  * 
  * This is the ONLY place where Elasticsearch client is created in V2,
  * completely eliminating ES client reuse issues!
  * 
- * @version 1.9.4
+ * @version 1.9.7
  */
 
 const through = require('through2');
@@ -72,6 +78,7 @@ module.exports = function() {
       
       const self = this;
       let venuesGenerated = 0;
+      let addressesGenerated = 0;  // NEW: Track address documents
       
       // Async iteration through BOTH LevelDB databases
       (async () => {
@@ -203,9 +210,42 @@ module.exports = function() {
               self.push(streetDoc);
               streetsGenerated++;
               
+              // ALSO generate individual address documents for each house number
+              // This allows searching for specific addresses like "Szkutnicza 10"
+              if (data.numbers && data.numbers.length > 0) {
+                for (const houseNumber of data.numbers) {
+                  try {
+                    const addressId = `address_${streetName.toLowerCase().replace(/\s+/g, '_')}_${houseNumber}_${avgLat.toFixed(6)}_${avgLon.toFixed(6)}`;
+                    
+                    const addressDoc = new Document('openstreetmap', 'address', addressId)
+                      .setName('default', `${streetName} ${houseNumber}`)
+                      .setCentroid({ lat: avgLat, lon: avgLon })  // Use street centroid
+                      .setAddress('street', streetName)
+                      .setAddress('number', houseNumber);
+                    
+                    // Copy same admin hierarchy as street
+                    if (data.osmAdmin) {
+                      const adminLevels = ['locality', 'localadmin', 'county', 'borough', 'neighbourhood', 'region', 'country'];
+                      for (const level of adminLevels) {
+                        if (data.osmAdmin[level] && data.osmAdmin[level].trim()) {
+                          const name = data.osmAdmin[level].trim();
+                          const osmId = 'osm:' + level + ':' + name.toLowerCase().replace(/\s+/g, '_');
+                          addressDoc.addParent(level, name, osmId, undefined);
+                        }
+                      }
+                    }
+                    
+                    self.push(addressDoc);
+                    addressesGenerated++;
+                  } catch (addrErr) {
+                    peliasLogger.error('[pass2_document_generator] Error generating address %s %s: %s', streetName, houseNumber, addrErr.message);
+                  }
+                }
+              }
+              
               // Log progress
               if (streetsGenerated % 100 === 0) {
-                peliasLogger.info('[pass2_document_generator] Generated %d streets', streetsGenerated);
+                peliasLogger.info('[pass2_document_generator] Generated %d streets, %d addresses', streetsGenerated, addressesGenerated);
               }
               
             } catch (err) {
@@ -214,17 +254,18 @@ module.exports = function() {
           }
           
           await streetsDb.close();
-          peliasLogger.info('[pass2_document_generator] Streets complete: %d documents', streetsGenerated);
+          peliasLogger.info('[pass2_document_generator] Streets complete: %d street docs, %d address docs', streetsGenerated, addressesGenerated);
         }
           
           // Summary
           peliasLogger.info('[pass2_document_generator] ========================================');
           peliasLogger.info(
-            '[pass2_document_generator] Complete: %d total documents (%d streets, %d venues/POI)',
-            streetsGenerated + venuesGenerated,
-            streetsGenerated,
-            venuesGenerated
+            '[pass2_document_generator] Complete: %d total documents',
+            streetsGenerated + addressesGenerated + venuesGenerated
           );
+          peliasLogger.info('[pass2_document_generator]   - %d streets', streetsGenerated);
+          peliasLogger.info('[pass2_document_generator]   - %d addresses', addressesGenerated);
+          peliasLogger.info('[pass2_document_generator]   - %d venues/POI', venuesGenerated);
           peliasLogger.info('[pass2_document_generator] ========================================');
           
           // Clean up BOTH LevelDB databases after successful generation
