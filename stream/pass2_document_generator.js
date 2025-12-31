@@ -1,24 +1,25 @@
 /**
  * Pass 2 Document Generator (V2 Pipeline)
  * 
- * Reads data from LevelDB and generates documents for Elasticsearch.
+ * Reads data from TWO separate LevelDB databases and generates documents for Elasticsearch.
  * No WOF lookup needed - all hierarchy is already in LevelDB from Pass 1!
  * 
- * Handles two types of documents:
- * 1. Streets (aggregated from addresses):
- *    - Key format: street|city|lat|lon
+ * Databases:
+ * 1. Streets DB (pelias-house-numbers-aggregation-v2):
+ *    - Aggregated addresses by street|city|lat|lon
  *    - Generates ONE street document per key with house_numbers
  *    - Full admin hierarchy from aggregate.osmAdmin
  * 
- * 2. Venues/POI (individual documents):
- *    - Key format: venue|layer|id
- *    - Generates individual venue/POI documents
+ * 2. Venues DB (pelias-venues-v2):
+ *    - Individual venue/POI documents
  *    - Full admin hierarchy from venueData.parent
+ * 
+ * Using separate databases prevents LEVEL_LOCKED errors from concurrent access!
  * 
  * This is the ONLY place where Elasticsearch client is created in V2,
  * completely eliminating ES client reuse issues!
  * 
- * @version 1.9.2
+ * @version 1.9.4
  */
 
 const through = require('through2');
@@ -34,7 +35,8 @@ const Document = require('pelias-model').Document;
 const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
 const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
 const IMPORT_STREETS = _.get(peliasConfig, 'imports.openstreetmap.importStreets', true);
-const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation-v2');
+const STREETS_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation-v2');
+const VENUES_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-venues-v2');
 
 module.exports = function() {
   let enabled = ENABLE_AGGREGATION && IMPORT_STREETS;
@@ -53,42 +55,61 @@ module.exports = function() {
         return done();
       }
       
-      // Check if database exists
-      if (!fs.existsSync(DB_PATH)) {
-        peliasLogger.warn('[pass2_document_generator] LevelDB not found at %s - skipping', DB_PATH);
+      // Check if databases exist
+      const streetsExist = fs.existsSync(STREETS_DB_PATH);
+      const venuesExist = fs.existsSync(VENUES_DB_PATH);
+      
+      if (!streetsExist && !venuesExist) {
+        peliasLogger.warn('[pass2_document_generator] No LevelDB found - skipping');
         return done();
       }
       
       peliasLogger.info('[pass2_document_generator] ========================================');
       peliasLogger.info('[pass2_document_generator] Generating documents from LevelDB');
-      peliasLogger.info('[pass2_document_generator] (streets + venues/POI)');
+      peliasLogger.info('[pass2_document_generator] Streets DB: %s', streetsExist ? 'found' : 'not found');
+      peliasLogger.info('[pass2_document_generator] Venues DB: %s', venuesExist ? 'found' : 'not found');
       peliasLogger.info('[pass2_document_generator] ========================================');
       
       const self = this;
       let venuesGenerated = 0;
       
-      // Async iteration through LevelDB
+      // Async iteration through BOTH LevelDB databases
       (async () => {
-        const db = new Level(DB_PATH, { valueEncoding: 'json' });
-        
         try {
-          await db.open();
-          
-          for await (const [key, data] of db.iterator()) {
-            try {
-              // Check if this is a venue document (key starts with "venue|")
-              if (key.startsWith('venue|')) {
-                // Generate venue document
-                const venueDoc = generateVenueDocument(data);
+          // FIRST: Generate venue documents from venues DB
+          if (venuesExist) {
+            const venuesDb = new Level(VENUES_DB_PATH, { valueEncoding: 'json' });
+            await venuesDb.open();
+            
+            for await (const [key, venueData] of venuesDb.iterator()) {
+              try {
+                const venueDoc = generateVenueDocument(venueData);
                 if (venueDoc) {
                   self.push(venueDoc);
                   venuesGenerated++;
+                  
+                  if (venuesGenerated % 100 === 0) {
+                    peliasLogger.info('[pass2_document_generator] Generated %d venues', venuesGenerated);
+                  }
                 }
-                continue;
+              } catch (err) {
+                peliasLogger.error('[pass2_document_generator] Error processing venue "%s": %s', key, err.message);
               }
-              
-              // Otherwise, it's a street aggregate
-              const aggregate = data;
+            }
+            
+            await venuesDb.close();
+            peliasLogger.info('[pass2_document_generator] Venues complete: %d documents', venuesGenerated);
+          }
+          
+          // SECOND: Generate street documents from streets DB
+          if (streetsExist) {
+            const streetsDb = new Level(STREETS_DB_PATH, { valueEncoding: 'json' });
+            await streetsDb.open();
+            
+            for await (const [key, aggregate] of streetsDb.iterator()) {
+              try {
+                // Street aggregate processing
+                const data = aggregate;
               
               // Validate aggregate
               if (!aggregate || !aggregate.numbers || aggregate.numbers.length === 0) {
@@ -183,22 +204,20 @@ module.exports = function() {
               streetsGenerated++;
               
               // Log progress
-              if ((streetsGenerated + venuesGenerated) % 1000 === 0) {
-                peliasLogger.info(
-                  '[pass2_document_generator] Generated %d documents (%d streets, %d venues/POI)',
-                  streetsGenerated + venuesGenerated,
-                  streetsGenerated,
-                  venuesGenerated
-                );
+              if (streetsGenerated % 100 === 0) {
+                peliasLogger.info('[pass2_document_generator] Generated %d streets', streetsGenerated);
               }
               
             } catch (err) {
-              peliasLogger.error('[pass2_document_generator] Error processing key "%s": %s', key, err.message);
+              peliasLogger.error('[pass2_document_generator] Error processing street "%s": %s', key, err.message);
             }
           }
           
-          await db.close();
+          await streetsDb.close();
+          peliasLogger.info('[pass2_document_generator] Streets complete: %d documents', streetsGenerated);
+        }
           
+          // Summary
           peliasLogger.info('[pass2_document_generator] ========================================');
           peliasLogger.info(
             '[pass2_document_generator] Complete: %d total documents (%d streets, %d venues/POI)',
@@ -208,11 +227,17 @@ module.exports = function() {
           );
           peliasLogger.info('[pass2_document_generator] ========================================');
           
-          // Clean up LevelDB after successful generation
-          peliasLogger.info('[pass2_document_generator] Cleaning up LevelDB');
+          // Clean up BOTH LevelDB databases after successful generation
+          peliasLogger.info('[pass2_document_generator] Cleaning up LevelDB databases');
           try {
-            fs.rmSync(DB_PATH, { recursive: true, force: true });
-            peliasLogger.info('[pass2_document_generator] LevelDB cleaned up successfully');
+            if (fs.existsSync(STREETS_DB_PATH)) {
+              fs.rmSync(STREETS_DB_PATH, { recursive: true, force: true });
+              peliasLogger.info('[pass2_document_generator] Streets DB cleaned up');
+            }
+            if (fs.existsSync(VENUES_DB_PATH)) {
+              fs.rmSync(VENUES_DB_PATH, { recursive: true, force: true });
+              peliasLogger.info('[pass2_document_generator] Venues DB cleaned up');
+            }
           } catch (err) {
             peliasLogger.warn('[pass2_document_generator] Failed to clean up LevelDB: %s', err.message);
           }
@@ -221,9 +246,6 @@ module.exports = function() {
           
         } catch (err) {
           peliasLogger.error('[pass2_document_generator] Fatal error:', err);
-          if (db) {
-            await db.close();
-          }
           done(err);
         }
       })();

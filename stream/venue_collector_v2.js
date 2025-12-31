@@ -24,7 +24,7 @@ const fs = require('fs');
 
 // Configuration
 const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
-const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation-v2');
+const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-venues-v2'); // Separate DB for venues!
 
 // In-memory buffer before writing to LevelDB
 const BUFFER_SIZE = 1000;
