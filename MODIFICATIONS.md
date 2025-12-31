@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.13
+## Version: v1.9.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.13`
+- **Docker Image**: `tiskel/openstreetmap:v1.9.0`
 
 ## Key Features
 
@@ -402,6 +402,76 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.9.0 (2025-12-31)
+
+**🚀 NEW: V2 Pipeline - Optimized Import with WOF in Pass 1**
+
+Major architecture improvement with new 2-pass pipeline:
+
+**Key Changes:**
+- ⚡ **OSM PBF read only ONCE** (vs twice in V1)
+- 🌍 **WOF lookup in Pass 1** (before LevelDB storage)
+- 🔑 **New aggregation key**: `street|city|lat|lon` (0.1° precision)
+- 📊 **Full hierarchy in LevelDB** (no WOF needed in Pass 2)
+- 🎯 **Country always from WOF** ("Polska" not "PL")
+- 🚀 **Faster import** (1x OSM read vs 2x)
+- 💾 **Same memory usage** (still uses periodic batching)
+
+**New Files:**
+- `stream/importPipelineV2.js` - Main V2 pipeline orchestrator
+- `stream/document_splitter.js` - Routes docs to LevelDB or Elasticsearch
+- `stream/house_numbers_collector_v2.js` - Collects with new key + full hierarchy
+- `stream/pass2_document_generator.js` - Generates docs from LevelDB
+
+**Modified Files:**
+- `index.js` - Added V2 pipeline selector via `useV2Pipeline` config
+
+**Configuration:**
+```json
+{
+  "imports": {
+    "openstreetmap": {
+      "useV2Pipeline": true,
+      "aggregateHouseNumbers": true
+    }
+  }
+}
+```
+
+**V2 Pipeline Flow:**
+
+```
+PASS 1: OSM PBF → WOF lookup → Split
+  ├─→ Addresses with street → LevelDB (with full hierarchy)
+  └─→ Venues/POI → Elasticsearch (direct import)
+
+PASS 2: LevelDB → Generate streets → Elasticsearch
+  └─→ No WOF lookup needed (hierarchy already in LevelDB!)
+```
+
+**Benefits:**
+- ✅ Prevents street splitting (e.g., "aleja Akacjowa" stays as one)
+- ✅ Consistent country names ("Polska" from WOF, not "PL" from OSM)
+- ✅ Faster import (50% less PBF reads)
+- ✅ Simpler Pass 2 (no WOF lookup overhead)
+- ✅ Backward compatible (V1 still available)
+
+**Tradeoffs:**
+- ⚠️ Individual address documents not generated (only streets)
+- ⚠️ V2 focuses on street-level geocoding (most common use case)
+- ✅ Use V1 if you need individual address search
+
+**Aggregation Key Comparison:**
+
+| Version | Key Format | Precision | Issue |
+|---------|-----------|-----------|-------|
+| V1 | `street\|lat\|lon` | 0.01° (~1.1km) | Splits long streets |
+| V2 | `street\|city\|lat\|lon` | 0.1° (~11km) | ✅ No splits, city-aware |
+
+**Example:** "aleja Akacjowa, Wrocław" no longer splits into multiple entries.
+
+---
 
 ### v1.8.13 (2025-12-31)
 
