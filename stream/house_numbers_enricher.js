@@ -119,9 +119,8 @@ module.exports = function() {
               // Log progress every 10K documents
               if (enrichedCount % 10000 === 0) {
                 peliasLogger.info(
-                  '[house_numbers_enricher] Enriched %d addresses (%d admin updated, %d not found)',
+                  '[house_numbers_enricher] Enriched %d addresses (%d not found)',
                   enrichedCount,
-                  adminUpdatedCount,
                   missedCount
                 );
               }
