@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.9.1
+## Version: v1.9.2
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.9.1`
+- **Docker Image**: `tiskel/openstreetmap:v1.9.2`
 
 ## Key Features
 
@@ -403,9 +403,53 @@ docker push tiskel/openstreetmap:v1.4.1
 
 ## Changelog
 
+### v1.9.2 (2025-12-31)
+
+**🚀 MAJOR FIX: Complete architectural change - ALL documents to LevelDB in Pass 1**
+
+**Problem:**
+- Previous approach tried to import venues directly to ES in Pass 1
+- Pass 2 also needed ES client → inevitable reuse conflict
+- Even with different client names, `pelias-dbclient` cached configuration
+
+**New Architecture:**
+```
+Pass 1: OSM PBF → WOF lookup → LevelDB (streets + venues + POI)
+Pass 2: LevelDB → Elasticsearch (everything)
+```
+
+**Key Changes:**
+- **Pass 1**: NO Elasticsearch at all! Everything goes to LevelDB
+  - Streets: Aggregated by `street|city|lat|lon` key
+  - Venues/POI: Individual `venue|layer|id` key
+  - Full WOF hierarchy stored for all documents
+  
+- **Pass 2**: Only one ES client, reads everything from LevelDB
+  - Generates street documents from aggregates
+  - Generates venue/POI documents from individual records
+  - No WOF lookup needed - hierarchy already in LevelDB
+
+**Files Changed:**
+- `stream/document_splitter.js` - Routes all docs to LevelDB collectors
+- `stream/venue_collector_v2.js` - NEW: Collects venues to LevelDB
+- `stream/pass2_document_generator.js` - Reads & generates both streets and venues
+- `stream/importPipelineV2.js` - Single ES client in Pass 2 only
+
+**Benefits:**
+- ✅ **Zero ES client reuse issues** (only one client total!)
+- ✅ **Venues/POI included** (not discarded)
+- ✅ **Full WOF hierarchy** for all document types
+- ✅ **Simpler architecture** (LevelDB as single staging area)
+- ✅ **Same performance** (still 1x OSM read, 1x WOF lookup)
+
+**Result:**
+This is the proper solution requested by user - all documents imported in single pipeline!
+
+---
+
 ### v1.9.1 (2025-12-31)
 
-**🐛 HOTFIX: Fixed Elasticsearch client reuse error in V2 pipeline**
+**🐛 HOTFIX: Fixed Elasticsearch client reuse error in V2 pipeline** (DEPRECATED - didn't work)
 
 **Problem:**
 - Pass 1 and Pass 2 tried to use same Elasticsearch client name
