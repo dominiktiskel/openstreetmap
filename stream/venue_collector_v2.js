@@ -35,9 +35,68 @@ module.exports = function() {
   let totalVenues = 0;
   let dbInitialized = false;
   
+  // Initialize DB synchronously
+  const initDB = async () => {
+    if (!dbInitialized) {
+      dbInitialized = true;
+      try {
+        // Ensure directory exists
+        if (!fs.existsSync(DB_PATH)) {
+          fs.mkdirSync(DB_PATH, { recursive: true });
+        }
+        
+        db = new Level(DB_PATH, { valueEncoding: 'json' });
+        await db.open();
+        
+        peliasLogger.info('[venue_collector_v2] LevelDB opened at %s', DB_PATH);
+      } catch (err) {
+        peliasLogger.error('[venue_collector_v2] Error opening database:', err);
+      }
+    }
+  };
+  
   const stream = through.obj(
     function transform(doc, enc, next) {
-      try {
+      // Initialize DB on first document
+      if (!dbInitialized) {
+        initDB().then(() => {
+          processDocument(doc, next);
+        }).catch(err => {
+          peliasLogger.error('[venue_collector_v2] DB init failed:', err);
+          next();
+        });
+      } else {
+        processDocument(doc, next);
+      }
+    },
+    
+    function flush(done) {
+      // Final flush
+      if (buffer.length > 0 && db) {
+        flushBuffer(db, buffer, () => {
+          peliasLogger.info(
+            '[venue_collector_v2] Final flush: %d venues/POI saved to LevelDB',
+            totalVenues
+          );
+          
+          // Close database
+          db.close().then(() => {
+            done();
+          }).catch((err) => {
+            peliasLogger.error('[venue_collector_v2] Error closing database:', err);
+            done(err);
+          });
+        });
+      } else {
+        peliasLogger.info('[venue_collector_v2] No venues to save');
+        done();
+      }
+    }
+  );
+  
+  // Process document function
+  function processDocument(doc, next) {
+    try {
         // Extract document data
         const layer = doc.getLayer();
         const id = doc.getId();
@@ -97,51 +156,7 @@ module.exports = function() {
         peliasLogger.error('[venue_collector_v2] Error processing document:', err);
         next();
       }
-    },
-    
-    function flush(done) {
-      // Final flush
-      if (buffer.length > 0 && db) {
-        flushBuffer(db, buffer, () => {
-          peliasLogger.info(
-            '[venue_collector_v2] Final flush: %d venues/POI saved to LevelDB',
-            totalVenues
-          );
-          
-          // Close database
-          db.close().then(() => {
-            done();
-          }).catch((err) => {
-            peliasLogger.error('[venue_collector_v2] Error closing database:', err);
-            done(err);
-          });
-        });
-      } else {
-        peliasLogger.info('[venue_collector_v2] No venues to save');
-        done();
-      }
-    }
-  );
-  
-  // Initialize database asynchronously when first document arrives
-  stream.on('pipe', async () => {
-    if (!dbInitialized) {
-      dbInitialized = true;
-      try {
-        // Ensure directory exists
-        if (!fs.existsSync(DB_PATH)) {
-          fs.mkdirSync(DB_PATH, { recursive: true });
-        }
-        
-        db = new Level(DB_PATH, { valueEncoding: 'json' });
-        await db.open();
-        
-        peliasLogger.info('[venue_collector_v2] LevelDB opened at %s', DB_PATH);
-      } catch (err) {
-        peliasLogger.error('[venue_collector_v2] Error opening database:', err);
-      }
-    }
-  });
+  }
   
   // Catch stream errors
   stream.on('error', peliasLogger.error.bind(peliasLogger, __filename));

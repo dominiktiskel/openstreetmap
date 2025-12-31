@@ -85,7 +85,13 @@ streams.importPass2 = function(){
 
   // Pass 2: read from LevelDB and generate street docs
   // No OSM PBF parsing, no WOF lookup - everything is already in LevelDB!
-  streams.pass2DocumentGenerator()
+  const generator = streams.pass2DocumentGenerator();
+  
+  // Trigger flush phase by ending the stream immediately
+  // (pass2_document_generator works in flush phase, not transform)
+  generator.end();
+  
+  generator
     .pipe( streams.blacklistStream() )
     .pipe( streams.categoryMapper( categoryDefaults ) )
     .pipe( streams.addendumMapper() )
