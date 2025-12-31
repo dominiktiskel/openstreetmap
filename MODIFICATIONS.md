@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.9.2
+## Version: v1.9.3
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.9.2`
+- **Docker Image**: `tiskel/openstreetmap:v1.9.3`
 
 ## Key Features
 
@@ -403,9 +403,42 @@ docker push tiskel/openstreetmap:v1.4.1
 
 ## Changelog
 
+### v1.9.3 (2025-12-31)
+
+**🐛 CRITICAL FIXES: Venue collection and Pass 2 execution**
+
+**Problems in v1.9.2:**
+1. **Venues not saved to LevelDB**
+   - `venue_collector_v2` used `stream.on('pipe')` for DB init
+   - This event never fired → DB never opened
+   - Result: 505 venues routed but 0 saved ❌
+
+2. **Pass 2 generator not executing**
+   - `pass2_document_generator` works in flush phase
+   - Pipeline never called `.end()` → flush never triggered
+   - Result: 0 documents generated from LevelDB ❌
+
+**Solutions:**
+1. **`stream/venue_collector_v2.js`**
+   - DB initialization moved to transform phase
+   - Opens DB on first document arrival
+   - Result: Venues properly saved to LevelDB ✅
+
+2. **`stream/importPipelineV2.js`**
+   - Call `generator.end()` before piping
+   - This triggers flush phase immediately
+   - Result: Documents read from LevelDB and imported ✅
+
+**Testing:**
+- Pass 1: "3471 streets, 505 venues → LevelDB"
+- Pass 2: Should show "137 street docs, 505 venue docs generated"
+- API: Should return results for streets and venues
+
+---
+
 ### v1.9.2 (2025-12-31)
 
-**🚀 MAJOR FIX: Complete architectural change - ALL documents to LevelDB in Pass 1**
+**🚀 MAJOR FIX: Complete architectural change - ALL documents to LevelDB in Pass 1** (had bugs, fixed in v1.9.3)
 
 **Problem:**
 - Previous approach tried to import venues directly to ES in Pass 1
