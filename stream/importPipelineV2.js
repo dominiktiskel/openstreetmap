@@ -85,9 +85,10 @@ streams.importPass2 = function(){
 
   // Pass 2 is simple: read from LevelDB and generate docs
   // No OSM PBF parsing, no WOF lookup - everything is already in LevelDB!
+  // Use separate ES client name to avoid conflict with Pass 1
   streams.pass2DocumentGenerator()
     .pipe( streams.dbMapper() )
-    .pipe( streams.elasticsearch({name: 'openstreetmap'}) );
+    .pipe( streams.elasticsearch({name: 'openstreetmap-pass2'}) );
 };
 
 // Main import function - orchestrates both passes

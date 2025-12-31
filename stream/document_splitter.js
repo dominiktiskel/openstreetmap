@@ -20,7 +20,8 @@ const elasticsearch = require('pelias-dbclient');
 module.exports = function() {
   // Create streams for both paths
   const collector = houseNumbersCollectorV2();
-  const esStream = dbMapper().pipe(elasticsearch({name: 'openstreetmap'}));
+  // Use separate ES client name to avoid "Do not reuse objects" error
+  const esStream = dbMapper().pipe(elasticsearch({name: 'openstreetmap-pass1'}));
   
   // Statistics
   let totalDocs = 0;
