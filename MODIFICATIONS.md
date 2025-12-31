@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.9.3
+## Version: v1.9.4
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.9.3`
+- **Docker Image**: `tiskel/openstreetmap:v1.9.4`
 
 ## Key Features
 
@@ -403,9 +403,58 @@ docker push tiskel/openstreetmap:v1.4.1
 
 ## Changelog
 
+### v1.9.4 (2025-12-31)
+
+**🔒 CRITICAL FIX: LevelDB locking conflict - separate databases**
+
+**Problem in v1.9.3:**
+```
+Error: IO error: lock /tmp/pelias-house-numbers-aggregation-v2/LOCK: already held by process
+code: LEVEL_LOCKED
+```
+
+**Root Cause:**
+- `venue_collector_v2` and `house_numbers_collector_v2` used **same DB path**
+- Both tried to open DB **simultaneously** in Pass 1
+- LevelDB allows only **ONE process** per database
+- Result: LEVEL_LOCKED error, no documents saved ❌
+
+**Solution:**
+Separate LevelDB databases for different data types:
+
+```
+Pass 1:
+  - Streets → /tmp/pelias-house-numbers-aggregation-v2
+  - Venues → /tmp/pelias-venues-v2
+
+Pass 2:
+  - Read streets DB → generate street docs
+  - Read venues DB → generate venue docs
+  - Sequential access, no conflicts!
+```
+
+**Files Changed:**
+- `stream/venue_collector_v2.js`
+  - Changed DB path from `pelias-house-numbers-aggregation-v2` to `pelias-venues-v2`
+  
+- `stream/pass2_document_generator.js`
+  - Open and read **both** databases sequentially
+  - Cleanup **both** databases after import
+
+**Benefits:**
+- ✅ **No DB locking conflicts** (separate databases)
+- ✅ **Concurrent writes in Pass 1** (streets & venues simultaneously)
+- ✅ **Sequential reads in Pass 2** (venues first, then streets)
+- ✅ **Full data import** (all streets + all venues)
+
+**Result:**
+V2 pipeline finally working correctly with streets AND venues imported!
+
+---
+
 ### v1.9.3 (2025-12-31)
 
-**🐛 CRITICAL FIXES: Venue collection and Pass 2 execution**
+**🐛 CRITICAL FIXES: Venue collection and Pass 2 execution** (had DB locking bug, fixed in v1.9.4)
 
 **Problems in v1.9.2:**
 1. **Venues not saved to LevelDB**
