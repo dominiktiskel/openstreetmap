@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.9.0
+## Version: v1.9.1
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.9.0`
+- **Docker Image**: `tiskel/openstreetmap:v1.9.1`
 
 ## Key Features
 
@@ -402,6 +402,31 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.9.1 (2025-12-31)
+
+**🐛 HOTFIX: Fixed Elasticsearch client reuse error in V2 pipeline**
+
+**Problem:**
+- Pass 1 and Pass 2 tried to use same Elasticsearch client name
+- Error: "Do not reuse objects to configure the elasticsearch Client class"
+- Import failed after Pass 1 completion
+
+**Solution:**
+- Pass 1 uses `openstreetmap-pass1` client name
+- Pass 2 uses `openstreetmap-pass2` client name
+- Separate clients prevent reuse conflict
+
+**Files Changed:**
+- `stream/document_splitter.js` - ES client name: `openstreetmap-pass1`
+- `stream/importPipelineV2.js` - ES client name: `openstreetmap-pass2`
+
+**Result:**
+- ✅ Venues/POI imported in Pass 1
+- ✅ Streets imported in Pass 2
+- ✅ No ES client conflicts
+
+---
 
 ### v1.9.0 (2025-12-31)
 
