@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.9.5
+## Version: v1.9.6
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.9.5`
+- **Docker Image**: `tiskel/openstreetmap:v1.9.6`
 
 ## Key Features
 
@@ -402,6 +402,66 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.9.6 (2025-12-31)
+
+**🔑 CRITICAL FIX: Street aggregation key missing city**
+
+**Problem:**
+Street IDs were missing city component:
+```json
+{
+  "id": "street_szkutnicza__51.2_17.0",  // ← Double underscore! City missing!
+  "locality": "Wrocław"  // ← WOF has the city, but not in ID
+}
+```
+
+Should be:
+```json
+{
+  "id": "street_szkutnicza_wrocław_51.2_17.0",  // ← City included!
+  "locality": "Wrocław"
+}
+```
+
+**Root Cause:**
+```javascript
+// house_numbers_collector_v2.js - generateStreetKey()
+const city = doc.getAddress('city') || '';  // ← Gets OSM addr:city tag
+```
+
+Problems:
+- Most OSM addresses DON'T have `addr:city` tag
+- WOF lookup already completed → `doc.parent.locality` available
+- But `generateStreetKey` ignored WOF data!
+- Result: Empty city → double underscore in ID
+
+**Solution:**
+```javascript
+// NEW: Priority-based city extraction
+let city = '';
+if (doc.parent && doc.parent.locality && doc.parent.locality[0]) {
+  city = doc.parent.locality[0];  // Priority 1: WOF (always present!)
+} else {
+  city = doc.getAddress('city') || '';  // Priority 2: OSM tag (rare)
+}
+```
+
+**Benefits:**
+- ✅ **City always in street ID** (from WOF)
+- ✅ **Prevents street merging** (same street name, different cities)
+- ✅ **Consistent naming** (WOF locality vs random OSM tags)
+- ✅ **Better search precision** (city context included)
+
+**Example:**
+- Before: All "Kwiatowa" streets might merge → wrong!
+- After: "Kwiatowa, Wrocław" vs "Kwiatowa, Poznań" → separate ✅
+
+**Note:**
+- `osmAdmin` initialization (lines 226-232) already used WOF correctly
+- Only `generateStreetKey` needed the fix
+
+---
 
 ### v1.9.5 (2025-12-31)
 
