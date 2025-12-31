@@ -72,24 +72,34 @@ module.exports = function() {
     
     function flush(done) {
       // Final flush
+      const closeDB = () => {
+        if (db) {
+          peliasLogger.info('[venue_collector_v2] Closing database');
+          db.close().then(() => {
+            peliasLogger.info('[venue_collector_v2] Database closed successfully');
+            done();
+          }).catch((err) => {
+            peliasLogger.error('[venue_collector_v2] Error closing database:', err);
+            done(err);
+          });
+        } else {
+          done();
+        }
+      };
+      
       if (buffer.length > 0 && db) {
         flushBuffer(db, buffer, () => {
           peliasLogger.info(
             '[venue_collector_v2] Final flush: %d venues/POI saved to LevelDB',
             totalVenues
           );
-          
-          // Close database
-          db.close().then(() => {
-            done();
-          }).catch((err) => {
-            peliasLogger.error('[venue_collector_v2] Error closing database:', err);
-            done(err);
-          });
+          closeDB();
         });
       } else {
-        peliasLogger.info('[venue_collector_v2] No venues to save');
-        done();
+        if (totalVenues === 0) {
+          peliasLogger.info('[venue_collector_v2] No venues to save');
+        }
+        closeDB(); // Close DB even if buffer is empty!
       }
     }
   );

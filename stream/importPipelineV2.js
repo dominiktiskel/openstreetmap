@@ -68,8 +68,13 @@ streams.importPass1 = function(callback){
     .pipe( streams.adminLookup() )  // WOF lookup in Pass 1!
     .pipe( streams.documentSplitter() )  // Split: LevelDB vs direct to Elasticsearch
     .on('finish', function() {
-      peliasLogger.info('[importPipelineV2] Pass 1 complete, starting Pass 2...');
-      callback();
+      peliasLogger.info('[importPipelineV2] Pass 1 complete, waiting for LevelDB to close...');
+      // Wait 2 seconds for LevelDB flush and close to complete
+      // This prevents LEVEL_LOCKED errors when Pass 2 tries to open the same DBs
+      setTimeout(() => {
+        peliasLogger.info('[importPipelineV2] Starting Pass 2...');
+        callback();
+      }, 2000);
     })
     .on('error', function(err) {
       peliasLogger.error('[importPipelineV2] Pass 1 error:', err);
