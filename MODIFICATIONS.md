@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.8.12
+## Version: v1.8.13
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.8.12`
+- **Docker Image**: `tiskel/openstreetmap:v1.8.13`
 
 ## Key Features
 
@@ -402,6 +402,50 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.8.13 (2025-12-31)
+
+**🔧 Complete Admin Hierarchy for Streets: Added localadmin, county, borough, neighbourhood**
+
+**Problem:** Street documents only had 3 admin levels (locality, region, country) while addresses had all 7 levels (country, region, county, localadmin, locality, borough, neighbourhood).
+
+**Root Cause:** `admin_hierarchy_updater` only collected and propagated 3 levels from addresses to LevelDB aggregates. When `street_generator` created street documents, it only had access to those 3 levels.
+
+**Solution:**
+- ✅ **EXTENDED**: `admin_hierarchy_updater` now collects ALL 7 admin levels from address parent hierarchy
+- ✅ **EXTENDED**: `house_numbers_collector` initializes all 7 fields in `osmAdmin` object
+- ✅ **EXTENDED**: `street_generator` copies all 7 levels from LevelDB aggregate to street document
+- ✅ **RESULT**: Streets now have complete hierarchy: locality, localadmin, county, borough, neighbourhood, region, country
+
+**Files Changed:**
+- `stream/admin_hierarchy_updater.js` - Collect and update all 7 admin levels
+- `stream/house_numbers_collector.js` - Initialize all 7 fields in osmAdmin object
+- `stream/street_generator.js` - Copy all 7 levels to street document
+
+**Before:**
+```json
+{
+  "name": "Szkutnicza",
+  "layer": "street",
+  "locality": "Wrocław",
+  "region": "województwo dolnośląskie",
+  "country": "Polska"
+}
+```
+
+**After:**
+```json
+{
+  "name": "Szkutnicza",
+  "layer": "street",
+  "locality": "Wrocław",
+  "localadmin": "Wrocław",
+  "county": "Wrocław",
+  "borough": "Widawa",
+  "region": "województwo dolnośląskie",
+  "country": "Polska"
+}
+```
 
 ### v1.8.12 (2025-12-29)
 

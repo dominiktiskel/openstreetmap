@@ -119,13 +119,12 @@ module.exports = function() {
                 house_numbers: aggregate.numbers.join(',')
               });
 
-              // Set OSM admin data BEFORE WOF lookup (v1.8.2)
-              // This gives priority to OSM data (addr:city, addr:state, addr:country)
-              // over WOF, while still using WOF as fallback for missing fields.
+              // Set admin hierarchy from LevelDB aggregate (filled by admin_hierarchy_updater in Pass 2)
+              // This includes both OSM data (addr:city/state/country) and WOF data (localadmin/county/borough)
               const osmAdminFields = [];
               
               if (aggregate.osmAdmin) {
-                // Add locality from OSM (addr:city)
+                // Add locality (from OSM addr:city or WOF)
                 if (aggregate.osmAdmin.locality && aggregate.osmAdmin.locality.trim().length > 0) {
                   const locality = aggregate.osmAdmin.locality.trim();
                   const osmId = 'osm:locality:' + locality.toLowerCase().replace(/\s+/g, '_');
@@ -133,7 +132,39 @@ module.exports = function() {
                   osmAdminFields.push('locality');
                 }
                 
-                // Add region from OSM (addr:state)
+                // Add localadmin (from WOF hierarchy)
+                if (aggregate.osmAdmin.localadmin && aggregate.osmAdmin.localadmin.trim().length > 0) {
+                  const localadmin = aggregate.osmAdmin.localadmin.trim();
+                  const osmId = 'osm:localadmin:' + localadmin.toLowerCase().replace(/\s+/g, '_');
+                  streetDoc.addParent('localadmin', localadmin, osmId, undefined);
+                  osmAdminFields.push('localadmin');
+                }
+                
+                // Add county (from WOF hierarchy)
+                if (aggregate.osmAdmin.county && aggregate.osmAdmin.county.trim().length > 0) {
+                  const county = aggregate.osmAdmin.county.trim();
+                  const osmId = 'osm:county:' + county.toLowerCase().replace(/\s+/g, '_');
+                  streetDoc.addParent('county', county, osmId, undefined);
+                  osmAdminFields.push('county');
+                }
+                
+                // Add borough (from WOF hierarchy)
+                if (aggregate.osmAdmin.borough && aggregate.osmAdmin.borough.trim().length > 0) {
+                  const borough = aggregate.osmAdmin.borough.trim();
+                  const osmId = 'osm:borough:' + borough.toLowerCase().replace(/\s+/g, '_');
+                  streetDoc.addParent('borough', borough, osmId, undefined);
+                  osmAdminFields.push('borough');
+                }
+                
+                // Add neighbourhood (from WOF hierarchy)
+                if (aggregate.osmAdmin.neighbourhood && aggregate.osmAdmin.neighbourhood.trim().length > 0) {
+                  const neighbourhood = aggregate.osmAdmin.neighbourhood.trim();
+                  const osmId = 'osm:neighbourhood:' + neighbourhood.toLowerCase().replace(/\s+/g, '_');
+                  streetDoc.addParent('neighbourhood', neighbourhood, osmId, undefined);
+                  osmAdminFields.push('neighbourhood');
+                }
+                
+                // Add region (from OSM addr:state or WOF)
                 if (aggregate.osmAdmin.region && aggregate.osmAdmin.region.trim().length > 0) {
                   const region = aggregate.osmAdmin.region.trim();
                   const osmId = 'osm:region:' + region.toLowerCase().replace(/\s+/g, '_');
@@ -141,7 +172,7 @@ module.exports = function() {
                   osmAdminFields.push('region');
                 }
                 
-                // Add country from OSM (addr:country)
+                // Add country (from OSM addr:country or WOF)
                 if (aggregate.osmAdmin.country && aggregate.osmAdmin.country.trim().length > 0) {
                   const country = aggregate.osmAdmin.country.trim();
                   const osmId = 'osm:country:' + country.toLowerCase().replace(/\s+/g, '_');
@@ -150,15 +181,11 @@ module.exports = function() {
                 }
               }
               
-              // Mark which fields came from OSM so WOF lookup can respect them
+              // Mark which fields were set from LevelDB aggregate
+              // This prevents WOF adminLookup from overwriting them
               if (osmAdminFields.length > 0) {
                 streetDoc.setMeta('osmAdminFields', osmAdminFields);
               }
-              
-              // WOF adminLookup() downstream will:
-              // - Respect OSM fields marked in osmAdminFields
-              // - Fill in missing fields (county, localadmin, etc.)
-              // - Provide IDs and abbreviations for WOF-sourced fields
 
               // Push street document to pipeline
               self.push(streetDoc);

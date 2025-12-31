@@ -147,6 +147,10 @@ async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
           streetName: existingAggregate.streetName || bufferAggregate.streetName,
           osmAdmin: {
             locality: existingAggregate.osmAdmin?.locality || bufferAggregate.osmAdmin?.locality || '',
+            localadmin: existingAggregate.osmAdmin?.localadmin || bufferAggregate.osmAdmin?.localadmin || '',
+            county: existingAggregate.osmAdmin?.county || bufferAggregate.osmAdmin?.county || '',
+            borough: existingAggregate.osmAdmin?.borough || bufferAggregate.osmAdmin?.borough || '',
+            neighbourhood: existingAggregate.osmAdmin?.neighbourhood || bufferAggregate.osmAdmin?.neighbourhood || '',
             region: existingAggregate.osmAdmin?.region || bufferAggregate.osmAdmin?.region || '',
             country: existingAggregate.osmAdmin?.country || bufferAggregate.osmAdmin?.country || ''
           }
@@ -159,6 +163,10 @@ async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
           streetName: bufferAggregate.streetName,
           osmAdmin: {
             locality: bufferAggregate.osmAdmin?.locality || '',
+            localadmin: bufferAggregate.osmAdmin?.localadmin || '',
+            county: bufferAggregate.osmAdmin?.county || '',
+            borough: bufferAggregate.osmAdmin?.borough || '',
+            neighbourhood: bufferAggregate.osmAdmin?.neighbourhood || '',
             region: bufferAggregate.osmAdmin?.region || '',
             country: bufferAggregate.osmAdmin?.country || ''
           }
@@ -233,8 +241,14 @@ module.exports = function() {
                 centroid: { lat: 0, lon: 0, count: 0 },
                 streetName: doc.getAddress('street') || '',
                 // OSM admin data (for prioritizing over WOF)
+                // Only city/state/country available from addr:* tags in Pass 1
+                // localadmin/county/borough/neighbourhood will be filled in Pass 2 by admin_hierarchy_updater
                 osmAdmin: {
                   locality: doc.getAddress('city') || '',
+                  localadmin: '',
+                  county: '',
+                  borough: '',
+                  neighbourhood: '',
                   region: doc.getAddress('state') || '',
                   country: doc.getAddress('country') || ''
                 }

@@ -47,7 +47,7 @@ module.exports = function() {
   let addressCount = 0;
   
   // Collect parent hierarchy grouped by APPROXIMATE street key
-  // Map: approximateStreetKey -> {locality, region, country, count}
+  // Map: approximateStreetKey -> {locality, localadmin, county, borough, neighbourhood, region, country, count}
   const parentHierarchyMap = new Map();
 
   return through.obj(
@@ -65,16 +65,26 @@ module.exports = function() {
           addressCount++;
           
           const approximateKey = generateApproximateStreetKey(doc);
+          
+          // Collect ALL admin levels from parent hierarchy
           const parentLocality = doc.parent && doc.parent.locality && doc.parent.locality[0];
+          const parentLocaladmin = doc.parent && doc.parent.localadmin && doc.parent.localadmin[0];
+          const parentCounty = doc.parent && doc.parent.county && doc.parent.county[0];
+          const parentBorough = doc.parent && doc.parent.borough && doc.parent.borough[0];
+          const parentNeighbourhood = doc.parent && doc.parent.neighbourhood && doc.parent.neighbourhood[0];
           const parentRegion = doc.parent && doc.parent.region && doc.parent.region[0];
           const parentCountry = doc.parent && doc.parent.country && doc.parent.country[0];
           
           // Collect parent hierarchy for this approximate street key
           // Use first non-empty value (priority: first address wins)
-          if (parentLocality || parentRegion || parentCountry) {
+          if (parentLocality || parentLocaladmin || parentCounty || parentBorough || parentNeighbourhood || parentRegion || parentCountry) {
             if (!parentHierarchyMap.has(approximateKey)) {
               parentHierarchyMap.set(approximateKey, {
                 locality: parentLocality || '',
+                localadmin: parentLocaladmin || '',
+                county: parentCounty || '',
+                borough: parentBorough || '',
+                neighbourhood: parentNeighbourhood || '',
                 region: parentRegion || '',
                 country: parentCountry || '',
                 count: 1
@@ -85,6 +95,10 @@ module.exports = function() {
               existing.count++;
               // Update if current has value and existing doesn't
               if (parentLocality && !existing.locality) existing.locality = parentLocality;
+              if (parentLocaladmin && !existing.localadmin) existing.localadmin = parentLocaladmin;
+              if (parentCounty && !existing.county) existing.county = parentCounty;
+              if (parentBorough && !existing.borough) existing.borough = parentBorough;
+              if (parentNeighbourhood && !existing.neighbourhood) existing.neighbourhood = parentNeighbourhood;
               if (parentRegion && !existing.region) existing.region = parentRegion;
               if (parentCountry && !existing.country) existing.country = parentCountry;
             }
@@ -161,6 +175,38 @@ module.exports = function() {
                 }
               } else {
                 alreadyHasLocality++;
+              }
+              
+              // Update localadmin if aggregate doesn't have it
+              if (!aggregate.osmAdmin.localadmin || aggregate.osmAdmin.localadmin.trim() === '') {
+                if (parentHierarchy.localadmin && parentHierarchy.localadmin.trim()) {
+                  aggregate.osmAdmin.localadmin = parentHierarchy.localadmin;
+                  needsUpdate = true;
+                }
+              }
+              
+              // Update county if aggregate doesn't have it
+              if (!aggregate.osmAdmin.county || aggregate.osmAdmin.county.trim() === '') {
+                if (parentHierarchy.county && parentHierarchy.county.trim()) {
+                  aggregate.osmAdmin.county = parentHierarchy.county;
+                  needsUpdate = true;
+                }
+              }
+              
+              // Update borough if aggregate doesn't have it
+              if (!aggregate.osmAdmin.borough || aggregate.osmAdmin.borough.trim() === '') {
+                if (parentHierarchy.borough && parentHierarchy.borough.trim()) {
+                  aggregate.osmAdmin.borough = parentHierarchy.borough;
+                  needsUpdate = true;
+                }
+              }
+              
+              // Update neighbourhood if aggregate doesn't have it
+              if (!aggregate.osmAdmin.neighbourhood || aggregate.osmAdmin.neighbourhood.trim() === '') {
+                if (parentHierarchy.neighbourhood && parentHierarchy.neighbourhood.trim()) {
+                  aggregate.osmAdmin.neighbourhood = parentHierarchy.neighbourhood;
+                  needsUpdate = true;
+                }
               }
               
               // Update region if aggregate doesn't have it
