@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.9.6
+## Version: v1.9.7
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.9.6`
+- **Docker Image**: `tiskel/openstreetmap:v1.9.7`
 
 ## Key Features
 
@@ -402,6 +402,69 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v1.9.7 (2025-12-31)
+
+**📮 FEATURE: Individual address document generation**
+
+**Problem:**
+V2 pipeline generated streets and venues but NO individual addresses:
+- ✅ Street search worked: `"Szkutnicza"` → 1 result
+- ✅ Venue search worked: `"Lotnisko Wrocław"` → 4 results
+- ❌ Address search failed: `"Szkutnicza 10"` → 0 results ❌
+
+**User Expectation:**
+Users expect to search for specific addresses like "Szkutnicza 10", not just street names.
+
+**Root Cause:**
+V2 was initially designed as performance tradeoff:
+- Generate streets with house_numbers in addendum
+- Skip individual address documents to save space
+- Comment: "Individual addresses NOT generated to avoid storage overhead"
+
+But this broke address-level geocoding!
+
+**Solution:**
+In `pass2_document_generator.js`, after generating each street document:
+```javascript
+// For each house number in aggregate
+for (const houseNumber of data.numbers) {
+  // Generate individual address document
+  const addressDoc = new Document('openstreetmap', 'address', addressId)
+    .setName('default', `${streetName} ${houseNumber}`)
+    .setCentroid({ lat: avgLat, lon: avgLon })  // Use street centroid
+    .setAddress('street', streetName)
+    .setAddress('number', houseNumber);
+  
+  // Copy full hierarchy from aggregate (same as street)
+  // ... locality, localadmin, county, borough, region, country
+  
+  self.push(addressDoc);
+}
+```
+
+**Generated Documents Per Street:**
+1. ONE street document: `layer='street'` with house_numbers in addendum
+2. MULTIPLE address documents: `layer='address'` for each house number
+
+**Example (Szkutnicza):**
+- 1 street doc: `"street_szkutnicza_wrocław_51.2_17.0"`
+- 8 address docs: `"Szkutnicza 8"`, `"Szkutnicza 10"`, `"Szkutnicza 12"`, etc.
+
+**Statistics:**
+- Before v1.9.7: ~26,778 streets + 110,795 venues = **137,573 total docs**
+- After v1.9.7: ~26,778 streets + ~200,000 addresses + 110,795 venues = **~337,573 total docs**
+
+**Benefits:**
+- ✅ **Address-level search now works**
+- ✅ **Street-level search still works**
+- ✅ **All documents have full WOF hierarchy**
+- ✅ **No additional WOF lookup overhead** (data already in LevelDB)
+
+**Note:**
+All address documents use street centroid (not interpolated coordinates). True interpolation would require storing coordinates per address in LevelDB (too expensive). This is acceptable tradeoff - most geocoders use centroid or simple interpolation anyway.
+
+---
 
 ### v1.9.6 (2025-12-31)
 
