@@ -417,10 +417,16 @@ docker push tiskel/openstreetmap:v1.4.1
 - ✅ **EXTENDED**: `street_generator` copies all 7 levels from LevelDB aggregate to street document
 - ✅ **RESULT**: Streets now have complete hierarchy: locality, localadmin, county, borough, neighbourhood, region, country
 
+**Hotfix:**
+- 🐛 **FIXED**: `ReferenceError: adminUpdatedCount is not defined` in `house_numbers_enricher`
+- **Cause**: Leftover variable from old version when enricher tried to update admin hierarchy
+- **Fix**: Removed `adminUpdatedCount` from log message (enricher no longer updates admin, that's done by `admin_hierarchy_updater`)
+
 **Files Changed:**
 - `stream/admin_hierarchy_updater.js` - Collect and update all 7 admin levels
 - `stream/house_numbers_collector.js` - Initialize all 7 fields in osmAdmin object
 - `stream/street_generator.js` - Copy all 7 levels to street document
+- `stream/house_numbers_enricher.js` - Removed undefined variable from log (hotfix)
 
 **Before:**
 ```json
