@@ -1,22 +1,24 @@
 /**
  * Pass 2 Document Generator (V2 Pipeline)
  * 
- * Reads aggregated data from LevelDB and generates street documents.
- * No WOF lookup needed - all hierarchy is already in LevelDB!
+ * Reads data from LevelDB and generates documents for Elasticsearch.
+ * No WOF lookup needed - all hierarchy is already in LevelDB from Pass 1!
  * 
- * For each aggregate in LevelDB:
- * - Create ONE street document with house_numbers
- * - Copy full admin hierarchy from aggregate.osmAdmin
- * - No individual address documents (tradeoff for performance)
+ * Handles two types of documents:
+ * 1. Streets (aggregated from addresses):
+ *    - Key format: street|city|lat|lon
+ *    - Generates ONE street document per key with house_numbers
+ *    - Full admin hierarchy from aggregate.osmAdmin
  * 
- * Note: Individual addresses are NOT generated in V2 to avoid:
- * - Storing full coordinates for each address in LevelDB (wastes space)
- * - Reading OSM PBF twice (V1 does this, V2 avoids it)
+ * 2. Venues/POI (individual documents):
+ *    - Key format: venue|layer|id
+ *    - Generates individual venue/POI documents
+ *    - Full admin hierarchy from venueData.parent
  * 
- * Users who need individual addresses should use V1 pipeline.
- * V2 provides street-level search which covers most geocoding use cases.
+ * This is the ONLY place where Elasticsearch client is created in V2,
+ * completely eliminating ES client reuse issues!
  * 
- * @version 1.9.0
+ * @version 1.9.2
  */
 
 const through = require('through2');
@@ -58,10 +60,12 @@ module.exports = function() {
       }
       
       peliasLogger.info('[pass2_document_generator] ========================================');
-      peliasLogger.info('[pass2_document_generator] Generating street documents from LevelDB');
+      peliasLogger.info('[pass2_document_generator] Generating documents from LevelDB');
+      peliasLogger.info('[pass2_document_generator] (streets + venues/POI)');
       peliasLogger.info('[pass2_document_generator] ========================================');
       
       const self = this;
+      let venuesGenerated = 0;
       
       // Async iteration through LevelDB
       (async () => {
@@ -70,8 +74,22 @@ module.exports = function() {
         try {
           await db.open();
           
-          for await (const [key, aggregate] of db.iterator()) {
+          for await (const [key, data] of db.iterator()) {
             try {
+              // Check if this is a venue document (key starts with "venue|")
+              if (key.startsWith('venue|')) {
+                // Generate venue document
+                const venueDoc = generateVenueDocument(data);
+                if (venueDoc) {
+                  self.push(venueDoc);
+                  venuesGenerated++;
+                }
+                continue;
+              }
+              
+              // Otherwise, it's a street aggregate
+              const aggregate = data;
+              
               // Validate aggregate
               if (!aggregate || !aggregate.numbers || aggregate.numbers.length === 0) {
                 continue;
@@ -165,8 +183,13 @@ module.exports = function() {
               streetsGenerated++;
               
               // Log progress
-              if (streetsGenerated % 1000 === 0) {
-                peliasLogger.info('[pass2_document_generator] Generated %d street documents', streetsGenerated);
+              if ((streetsGenerated + venuesGenerated) % 1000 === 0) {
+                peliasLogger.info(
+                  '[pass2_document_generator] Generated %d documents (%d streets, %d venues/POI)',
+                  streetsGenerated + venuesGenerated,
+                  streetsGenerated,
+                  venuesGenerated
+                );
               }
               
             } catch (err) {
@@ -177,7 +200,12 @@ module.exports = function() {
           await db.close();
           
           peliasLogger.info('[pass2_document_generator] ========================================');
-          peliasLogger.info('[pass2_document_generator] Complete: %d street documents generated', streetsGenerated);
+          peliasLogger.info(
+            '[pass2_document_generator] Complete: %d total documents (%d streets, %d venues/POI)',
+            streetsGenerated + venuesGenerated,
+            streetsGenerated,
+            venuesGenerated
+          );
           peliasLogger.info('[pass2_document_generator] ========================================');
           
           // Clean up LevelDB after successful generation
@@ -202,4 +230,49 @@ module.exports = function() {
     }
   );
 };
+
+/**
+ * Generate a venue/POI document from LevelDB data
+ */
+function generateVenueDocument(venueData) {
+  try {
+    // Validate venue data
+    if (!venueData || !venueData.id || !venueData.layer) {
+      return null;
+    }
+    
+    if (!venueData.lat || !venueData.lon) {
+      peliasLogger.debug('[pass2_document_generator] Skipping venue (no coordinates): %s', venueData.id);
+      return null;
+    }
+    
+    // Create venue document
+    const venueDoc = new Document('openstreetmap', venueData.layer, venueData.id)
+      .setCentroid({ lat: venueData.lat, lon: venueData.lon });
+    
+    // Add name if available
+    if (venueData.name && venueData.name.trim()) {
+      venueDoc.setName('default', venueData.name.trim());
+    }
+    
+    // Copy FULL admin hierarchy from venue data (already from WOF in Pass 1!)
+    if (venueData.parent) {
+      const hierarchyLevels = ['locality', 'localadmin', 'county', 'borough', 'neighbourhood', 'region', 'country'];
+      
+      for (const placetype of hierarchyLevels) {
+        if (venueData.parent[placetype] && venueData.parent[placetype].trim()) {
+          const name = venueData.parent[placetype].trim();
+          const osmId = 'osm:' + placetype + ':' + name.toLowerCase().replace(/\s+/g, '_');
+          venueDoc.addParent(placetype, name, osmId, undefined);
+        }
+      }
+    }
+    
+    return venueDoc;
+    
+  } catch (err) {
+    peliasLogger.error('[pass2_document_generator] Error generating venue document:', err);
+    return null;
+  }
+}
 

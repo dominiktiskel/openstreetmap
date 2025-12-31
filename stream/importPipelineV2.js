@@ -83,12 +83,15 @@ streams.importPass2 = function(){
   peliasLogger.info('[importPipelineV2] PASS 2: Generating addresses & streets from LevelDB');
   peliasLogger.info('[importPipelineV2] ========================================');
 
-  // Pass 2 is simple: read from LevelDB and generate docs
+  // Pass 2: read from LevelDB and generate street docs
   // No OSM PBF parsing, no WOF lookup - everything is already in LevelDB!
-  // Use separate ES client name to avoid conflict with Pass 1
   streams.pass2DocumentGenerator()
+    .pipe( streams.blacklistStream() )
+    .pipe( streams.categoryMapper( categoryDefaults ) )
+    .pipe( streams.addendumMapper() )
+    .pipe( streams.popularityMapper() )
     .pipe( streams.dbMapper() )
-    .pipe( streams.elasticsearch({name: 'openstreetmap-pass2'}) );
+    .pipe( streams.elasticsearch({name: 'openstreetmap'}) );
 };
 
 // Main import function - orchestrates both passes
