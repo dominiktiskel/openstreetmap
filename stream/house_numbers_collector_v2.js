@@ -41,10 +41,22 @@ const BATCH_SIZE = 10000;
  * 
  * Includes city to prevent merging streets with same name in different cities
  * Uses 0.1° precision to avoid splitting long streets
+ * 
+ * City priority:
+ * 1. WOF locality (from parent hierarchy) - most reliable
+ * 2. OSM addr:city tag - fallback
  */
 function generateStreetKey(doc) {
   const street = doc.getAddress('street') || '';
-  const city = doc.getAddress('city') || '';  // From OSM addr:city
+  
+  // Get city from WOF hierarchy (locality) first, then fallback to OSM tag
+  let city = '';
+  if (doc.parent && doc.parent.locality && doc.parent.locality[0]) {
+    city = doc.parent.locality[0];  // From WOF - most reliable!
+  } else {
+    city = doc.getAddress('city') || '';  // Fallback to OSM addr:city
+  }
+  
   const centroid = doc.getCentroid();
   const lat = centroid && centroid.lat ? centroid.lat.toFixed(1) : '0.0';  // 0.1° = ~11km
   const lon = centroid && centroid.lon ? centroid.lon.toFixed(1) : '0.0';
