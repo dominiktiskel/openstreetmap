@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v1.9.7
+## Version: v2.0.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v1.9.7`
+- **Docker Image**: `tiskel/openstreetmap:v2.0.0`
 
 ## Key Features
 
@@ -402,6 +402,76 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.0.0 (2026-01-03)
+
+**🎉 MAJOR REFACTOR: V2 Pipeline is now the default (V1 removed)**
+
+**BREAKING CHANGES:**
+This is a major refactor that removes the legacy V1 pipeline completely. V2 pipeline (introduced in v1.9.x) is now the only implementation and is simply called "the pipeline".
+
+**What was removed:**
+- ❌ V1 pipeline (`importPipeline.js` - old version)
+- ❌ `house_numbers_enricher.js` (V1)
+- ❌ `admin_hierarchy_updater.js` (V1)
+- ❌ `street_generator.js` (V1)
+- ❌ `house_numbers_collector.js` (V1)
+- ❌ `useV2Pipeline` configuration option
+- ❌ All V1/V2 selection logic from `index.js`
+
+**What was renamed (V2 → Default):**
+- `importPipelineV2.js` → `importPipeline.js`
+- `house_numbers_collector_v2.js` → `house_numbers_collector.js`
+- `venue_collector_v2.js` → `venue_collector.js`
+
+**What was cleaned up:**
+- 🧹 Removed "V2" mentions from all code and comments
+- 🧹 Simplified logger tags: `[importPipelineV2]` → `[importPipeline]`
+- 🧹 Updated version numbers to 2.0.0 across all files
+- 🧹 Removed ~1200 lines of legacy code
+
+**Current Architecture (now default):**
+```
+Pass 1: OSM PBF → WOF Lookup → LevelDB
+  - Streets aggregated by: street|city|lat|lon (0.1° precision)
+  - Venues stored individually: venue|layer|id
+  - Full WOF hierarchy stored for all documents
+
+Pass 2: LevelDB → Elasticsearch
+  - Generate street documents (with house_numbers)
+  - Generate individual address documents
+  - Generate venue/POI documents
+  - Single ES client (no conflicts)
+```
+
+**Benefits:**
+- ✅ **Simpler codebase** (50% less code to maintain)
+- ✅ **No confusion** (one pipeline, one way)
+- ✅ **Faster by default** (OSM read once, WOF in Pass 1)
+- ✅ **Full WOF hierarchy** always available
+- ✅ **Better data quality** (city in aggregation key)
+
+**Migration Guide:**
+If you were using `useV2Pipeline: true` in `pelias.json`:
+1. Remove the `useV2Pipeline` config option (no longer needed)
+2. Everything now works by default - no changes required!
+
+If you were using V1 (default in v1.8.x):
+1. V1 is gone - you're now using the optimized pipeline
+2. Expect faster imports and better data quality
+3. All features work the same or better
+
+**Statistics:**
+- Code deleted: ~1400 lines
+- Code added: ~200 lines (updates)
+- Net reduction: **~1200 lines** (50% of stream/ directory)
+- Files deleted: 5 major files
+- Files simplified: 6 files
+
+**Result:**
+Clean, maintainable codebase with a single, fast, reliable import pipeline! 🎉
+
+---
 
 ### v1.9.7 (2025-12-31)
 
