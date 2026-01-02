@@ -1,27 +1,27 @@
 /**
- * Document Splitter Stream (V2 Pipeline)
+ * Document Splitter Stream
  * 
  * Routes documents after WOF lookup to LevelDB:
- * 1. Addresses with street → houseNumbersCollectorV2 (aggregation key: street|city|lat|lon)
- * 2. Venues/POI/addresses without street → venueCollectorV2 (individual key: venue|layer|id)
+ * 1. Addresses with street → houseNumbersCollector (aggregation key: street|city|lat|lon)
+ * 2. Venues/POI/addresses without street → venueCollector (individual key: venue|layer|id)
  * 
  * Pass 1: Everything to LevelDB (no Elasticsearch)
  * Pass 2: Everything from LevelDB to Elasticsearch
  * 
  * This completely eliminates ES client reuse issues!
  * 
- * @version 1.9.2
+ * @version 2.0.0
  */
 
 const through = require('through2');
 const peliasLogger = require('pelias-logger').get('openstreetmap');
-const houseNumbersCollectorV2 = require('./house_numbers_collector_v2');
-const venueCollectorV2 = require('./venue_collector_v2');
+const houseNumbersCollector = require('./house_numbers_collector');
+const venueCollector = require('./venue_collector');
 
 module.exports = function() {
   // Create collectors
-  const streetCollector = houseNumbersCollectorV2();
-  const venueCollector = venueCollectorV2();
+  const streetCollector = houseNumbersCollector();
+  const venueCollector = venueCollector();
   
   // Statistics
   let totalDocs = 0;

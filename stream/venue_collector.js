@@ -1,5 +1,5 @@
 /**
- * Venue Collector V2 (V2 Pipeline)
+ * Venue Collector (Pass 1)
  * 
  * Collects venues, POI, and addresses without street to LevelDB.
  * These documents are stored individually (not aggregated) with full WOF hierarchy.
@@ -11,7 +11,7 @@
  * 
  * In Pass 2, these will be read from LevelDB and imported to Elasticsearch.
  * 
- * @version 1.9.2
+ * @version 2.0.0
  */
 
 const through = require('through2');

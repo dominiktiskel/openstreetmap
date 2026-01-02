@@ -1,3 +1,20 @@
+/**
+ * Import Pipeline - Two-Pass Architecture
+ * 
+ * Architecture:
+ * - Pass 1: OSM PBF → WOF lookup → LevelDB (addresses + venues)
+ * - Pass 2: LevelDB → Generate documents → Elasticsearch
+ * 
+ * Key features:
+ * - OSM PBF read only once
+ * - WOF lookup in Pass 1 → full hierarchy stored in LevelDB
+ * - Pass 2 generates: streets, addresses, and venues
+ * - Aggregation key: street|city|lat|lon (0.1° precision)
+ * - Country always from WOF ("Polska" not "PL")
+ * 
+ * @version 2.0.0
+ */
+
 var categoryDefaults = require('../config/category_map');
 var through = require('through2');
 var peliasLogger = require('pelias-logger').get('openstreetmap');
@@ -18,19 +35,17 @@ streams.addressesWithoutStreet = require('./addresses_without_street');
 streams.adminLookup = require('pelias-wof-admin-lookup').create;
 streams.addressExtractor = require('./address_extractor');
 streams.houseNumbersCollector = require('./house_numbers_collector');
-streams.houseNumbersEnricher = require('./house_numbers_enricher');
-streams.adminHierarchyUpdater = require('./admin_hierarchy_updater');
-streams.streetGenerator = require('./street_generator');
+streams.documentSplitter = require('./document_splitter');
+streams.pass2DocumentGenerator = require('./pass2_document_generator');
 streams.categoryMapper = require('./category_mapper');
 streams.addendumMapper = require('./addendum_mapper');
 streams.popularityMapper = require('./popularity_mapper');
-streams.osmAdminExtractor = require('./osm_admin_extractor');
 streams.dbMapper = require('pelias-model').createDocumentMapperStream;
 streams.elasticsearch = require('pelias-dbclient');
 
 var aggregateHouseNumbers = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
 
-// Pass 1: Collection phase (writes to LevelDB, discards documents)
+// Pass 1: OSM read + WOF lookup + split decision
 streams.importPass1 = function(callback){
   if (!aggregateHouseNumbers) {
     peliasLogger.info('[importPipeline] House numbers aggregation disabled, skipping Pass 1');
@@ -38,25 +53,28 @@ streams.importPass1 = function(callback){
   }
 
   peliasLogger.info('[importPipeline] ========================================');
-  peliasLogger.info('[importPipeline] PASS 1: Collecting house numbers to LevelDB');
+  peliasLogger.info('[importPipeline] PASS 1: Reading OSM + WOF lookup + Split');
   peliasLogger.info('[importPipeline] ========================================');
-
-  // Discard stream - drops all documents (we only care about the side-effect of collecting)
-  var discardStream = through.obj(function(doc, enc, next) {
-    // Drop document silently
-    next();
-  });
 
   streams.pbfParser()
     .pipe( streams.docConstructor() )
     .pipe( streams.addressesWithoutStreet() )
     .pipe( streams.tagMapper() )
     .pipe( streams.addressExtractor() )
-    .pipe( streams.houseNumbersCollector() )
-    .pipe( discardStream )
+    .pipe( streams.blacklistStream() )
+    .pipe( streams.categoryMapper( categoryDefaults ) )
+    .pipe( streams.addendumMapper() )
+    .pipe( streams.popularityMapper() )
+    .pipe( streams.adminLookup() )  // WOF lookup in Pass 1!
+    .pipe( streams.documentSplitter() )  // Split: LevelDB vs direct to Elasticsearch
     .on('finish', function() {
-      peliasLogger.info('[importPipeline] Pass 1 complete, starting Pass 2...');
-      callback();
+      peliasLogger.info('[importPipeline] Pass 1 complete, waiting for LevelDB to close...');
+      // Wait 2 seconds for LevelDB flush and close to complete
+      // This prevents LEVEL_LOCKED errors when Pass 2 tries to open the same DBs
+      setTimeout(() => {
+        peliasLogger.info('[importPipeline] Starting Pass 2...');
+        callback();
+      }, 2000);
     })
     .on('error', function(err) {
       peliasLogger.error('[importPipeline] Pass 1 error:', err);
@@ -64,26 +82,25 @@ streams.importPass1 = function(callback){
     });
 };
 
-// Pass 2: Enrichment phase (reads from LevelDB, adds addendum, writes to ES)
+// Pass 2: Read LevelDB and generate address + street documents
 streams.importPass2 = function(){
   peliasLogger.info('[importPipeline] ========================================');
-  peliasLogger.info('[importPipeline] PASS 2: Enriching addresses and importing to Elasticsearch');
+  peliasLogger.info('[importPipeline] PASS 2: Generating addresses & streets from LevelDB');
   peliasLogger.info('[importPipeline] ========================================');
 
-  streams.pbfParser()
-    .pipe( streams.docConstructor() )
-    .pipe( streams.addressesWithoutStreet() )
-    .pipe( streams.tagMapper() )
-    .pipe( streams.addressExtractor() )
-    .pipe( streams.houseNumbersEnricher() )  // Read from LevelDB and add addendum
+  // Pass 2: read from LevelDB and generate street docs
+  // No OSM PBF parsing, no WOF lookup - everything is already in LevelDB!
+  const generator = streams.pass2DocumentGenerator();
+  
+  // Trigger flush phase by ending the stream immediately
+  // (pass2_document_generator works in flush phase, not transform)
+  generator.end();
+  
+  generator
     .pipe( streams.blacklistStream() )
     .pipe( streams.categoryMapper( categoryDefaults ) )
     .pipe( streams.addendumMapper() )
     .pipe( streams.popularityMapper() )
-    .pipe( streams.osmAdminExtractor() )  // Extract admin data from OSM tags before WOF lookup
-    .pipe( streams.adminLookup() )  // WOF lookup for addresses (adds doc.parent.*)
-    .pipe( streams.adminHierarchyUpdater() )  // Update LevelDB aggregates with parent hierarchy
-    .pipe( streams.streetGenerator() )  // Generate street documents from LevelDB (now has updated locality!)
     .pipe( streams.dbMapper() )
     .pipe( streams.elasticsearch({name: 'openstreetmap'}) );
 };
@@ -103,8 +120,9 @@ streams.import = function(){
   } else {
     // Single-pass import without aggregation
     peliasLogger.info('[importPipeline] Running single-pass import (house numbers aggregation disabled)');
-    streams.importPass2(); // Pass 2 works fine without enricher if aggregation is disabled
+    streams.importPass2(); // Pass 2 works fine without aggregation
   }
 };
 
 module.exports = streams;
+

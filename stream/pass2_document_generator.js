@@ -1,5 +1,5 @@
 /**
- * Pass 2 Document Generator (V2 Pipeline)
+ * Pass 2 Document Generator
  * 
  * Reads data from TWO separate LevelDB databases and generates documents for Elasticsearch.
  * No WOF lookup needed - all hierarchy is already in LevelDB from Pass 1!
@@ -22,10 +22,10 @@
  * 
  * Using separate databases prevents LEVEL_LOCKED errors from concurrent access!
  * 
- * This is the ONLY place where Elasticsearch client is created in V2,
+ * This is the ONLY place where Elasticsearch client is created,
  * completely eliminating ES client reuse issues!
  * 
- * @version 1.9.7
+ * @version 2.0.0
  */
 
 const through = require('through2');
