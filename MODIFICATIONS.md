@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.0.0
+## Version: v2.0.1
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.0.0`
+- **Docker Image**: `tiskel/openstreetmap:v2.0.1`
 
 ## Key Features
 
@@ -402,6 +402,37 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.0.1 (2026-01-03)
+
+**🐛 HOTFIX: Variable name conflict in document_splitter**
+
+**Error:**
+```
+ReferenceError: Cannot access 'venueCollector' before initialization
+```
+
+**Problem:**
+```javascript
+const venueCollector = require('./venue_collector');
+// ...
+const venueCollector = venueCollector();  // ← Shadowing!
+```
+
+Variable name conflict - `venueCollector` used twice:
+1. As const for require() result
+2. As const for function call result
+
+**Solution:**
+```javascript
+const createVenueCollector = require('./venue_collector');
+// ...
+const venueCollector = createVenueCollector();  // ✅ OK!
+```
+
+Renamed imports to `createXxxCollector` pattern for clarity.
+
+---
 
 ### v2.0.0 (2026-01-03)
 
