@@ -15,13 +15,13 @@
 
 const through = require('through2');
 const peliasLogger = require('pelias-logger').get('openstreetmap');
-const houseNumbersCollector = require('./house_numbers_collector');
-const venueCollector = require('./venue_collector');
+const createHouseNumbersCollector = require('./house_numbers_collector');
+const createVenueCollector = require('./venue_collector');
 
 module.exports = function() {
   // Create collectors
-  const streetCollector = houseNumbersCollector();
-  const venueCollector = venueCollector();
+  const streetCollector = createHouseNumbersCollector();
+  const venueCollector = createVenueCollector();
   
   // Statistics
   let totalDocs = 0;
