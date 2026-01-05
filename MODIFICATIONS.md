@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.0.1
+## Version: v2.2.3
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.0.1`
+- **Docker Image**: `tiskel/openstreetmap:v2.2.5`
 
 ## Key Features
 
@@ -402,6 +402,334 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.2.5 (2026-01-03)
+
+**🐛 CRITICAL FIX: Postal codes now correctly saved to LevelDB**
+
+**Root Cause Found**: 
+The `flushBufferToLevelDB` function in `house_numbers_collector.js` was NOT including the `zip` field when writing aggregates to LevelDB, even though `zip` was correctly collected in memory during Pass 1.
+
+**The Bug**:
+1. ✅ `tag_mapper` correctly saved `zip` to documents
+2. ✅ `house_numbers_collector` correctly collected `zip` in memory buffer
+3. ❌ `flushBufferToLevelDB` **NEVER WROTE** `zip` to LevelDB!
+4. ❌ Pass 2 read aggregates from LevelDB with empty `zip`
+5. ❌ Final Elasticsearch documents had no postal codes
+
+**Debug Logs Revealed**:
+```
+[tag_mapper] SAVED postcode: key=addr:postcode, value=51-180, label=zip  ✅
+[house_numbers_collector] NEW street "Wrzosowa" with zip: "51-180"        ✅
+[pass2_document_generator] Street "..." - data.zip = "EMPTY"              ❌
+```
+
+**Fix Applied**:
+- Added `zip` field to LevelDB merge logic (line 135)
+- Added `zip` field to new aggregate creation (line 152)
+- Removed all debug logging (no longer needed)
+
+**Before** (line 127-145):
+```javascript
+finalAggregate = {
+  numbers: ...,
+  streetName: ...,
+  // zip was MISSING here!
+  osmAdmin: { ... }
+};
+```
+
+**After**:
+```javascript
+finalAggregate = {
+  numbers: ...,
+  streetName: ...,
+  zip: existingAggregate.zip || bufferAggregate.zip || '',  // ✅ NOW INCLUDED!
+  osmAdmin: { ... }
+};
+```
+
+**Impact**: 
+This was a **critical data loss bug**. All postal codes collected during import were being discarded when writing to LevelDB, resulting in zero postal codes in the final Elasticsearch index.
+
+**Testing**:
+```bash
+pelias import osm
+curl "http://localhost:4000/v1/autocomplete?text=Szkutnicza%2012"
+# Should now show "postalcode": "51-180"
+```
+
+**Files Changed**:
+- `stream/house_numbers_collector.js` - Add `zip` to LevelDB flush logic
+- `stream/pass2_document_generator.js` - Remove debug logs
+- `stream/tag_mapper.js` - Remove debug logs
+
+---
+
+### v2.2.4 (2026-01-03)
+
+**🔍 DEBUG LEVEL 4: LevelDB zip tracking**
+
+**Status**: v2.2.3 confirmed `tag_mapper` correctly saves `zip` to documents. Now debugging LevelDB storage/retrieval.
+
+**Added Debugging**:
+
+1. **`house_numbers_collector.js`**:
+   - Log when NEW street aggregate is created with initial `zip` value
+   - Log when `zip` is updated from subsequent address documents
+   - Example: `[house_numbers_collector] NEW street "Szkutnicza" with zip: "51-180"`
+
+2. **`pass2_document_generator.js`**:
+   - Log `data.zip` value when reading from LevelDB for streets
+   - Log whether `zip` was set or not set for street documents
+   - Log when `zip` is missing for address documents
+   - Example: `[pass2_document_generator] Street "Szkutnicza" - data.zip = "51-180"`
+
+**Hypothesis**: 
+`tag_mapper` saves `zip` ✅, but either:
+- LevelDB aggregate doesn't store `zip` correctly
+- LevelDB serialization drops `zip` field
+- `pass2_document_generator` reads empty `zip` from LevelDB
+
+**Testing**:
+```bash
+pelias import osm
+docker logs pelias_openstreetmap_1 2>&1 | grep -E "(zip|ZIP)"
+```
+
+**Files Changed**:
+- `stream/house_numbers_collector.js` - Add zip tracking logs
+- `stream/pass2_document_generator.js` - Add zip retrieval logs
+
+---
+
+### v2.2.3 (2026-01-03)
+
+**🔍 ENHANCED DEBUG: Multi-level postal code debugging**
+
+**Investigation**: OSM data confirmed to have `addr:postcode` tags, but they're not reaching Elasticsearch.
+
+**Enhanced Debugging with 3 levels**:
+
+1. **Level 1 - RAW TAG CHECK**: Before tag processing loop
+   ```
+   [tag_mapper] RAW TAG FOUND: addr:postcode = 51-180
+   ```
+   Shows if `addr:postcode` exists in the tags object
+
+2. **Level 2 - MAPPING CHECK**: During ADDRESS_SCHEMA matching
+   ```
+   [tag_mapper] MAPPING ADDRESS: key=addr:postcode -> label=zip, value=51-180
+   ```
+   Shows if the key is recognized by ADDRESS_SCHEMA
+
+3. **Level 3 - SAVE CONFIRMATION**: After doc.setAddress()
+   ```
+   [tag_mapper] SAVED postcode: key=addr:postcode, value=51-180, label=zip
+   ```
+   Confirms the value was saved to the document
+
+**Purpose**: 
+Identify exactly where in the pipeline postal codes are being lost:
+- If Level 1 missing: Tags not reaching tag_mapper
+- If Level 2 missing: ADDRESS_SCHEMA merge problem
+- If Level 3 missing: setAddress() failing
+
+**Testing**:
+```bash
+pelias import osm
+docker logs pelias_openstreetmap_1 2>&1 | grep "postcode"
+```
+
+**Files Changed**:
+- `stream/tag_mapper.js` - Add 3-level debug logging with INFO level
+
+---
+
+### v2.2.2 (2026-01-03)
+
+**🐛 DEBUG: Add postal code debugging and alternative tag mappings**
+
+**Problem**: 
+- Postal codes still not appearing in API responses despite being in OSM data
+- Need to debug why `addr:postcode` tag is not being processed
+
+**Investigation**:
+- OSM data confirmed to have `addr:postcode="51-180"` tags
+- `pelias-model` supports `zip` field in `address_parts`
+- Pipeline order is correct: tag_mapper → addressExtractor → house_numbers_collector
+- But `zip` field not present in Elasticsearch documents
+
+**Changes**:
+1. **`schema/address_osm.js`** - Added alternative postcode tag mappings:
+   - `postal_code` → `zip` (existing)
+   - `postcode` → `zip` (NEW - alternative tag)
+   - `post_code` → `zip` (NEW - alternative tag)
+
+2. **`stream/tag_mapper.js`** - Added debug logging:
+   - Logs when postcode/zip tags are found and processed
+   - Helps identify if OSM tags are being read correctly
+
+**Purpose**:
+This is a debugging release to help identify why postal codes are not making it to Elasticsearch.
+After import, check logs for debug messages about postcode processing.
+
+**Files Changed**:
+- `schema/address_osm.js` - Add alternative postcode tag names
+- `stream/tag_mapper.js` - Add debug logging for postcode fields
+
+**Testing**:
+After import with v2.2.2, check logs:
+```bash
+docker logs pelias_openstreetmap_1 2>&1 | grep -i "Found postcode"
+```
+
+---
+
+### v2.2.1 (2026-01-03)
+
+**🐛 HOTFIX: Fix postal code not saved for venues**
+
+**Problem**: 
+- Venues/POI were not getting `postalcode` field even though the data exists in OSM
+- Addresses and streets were working correctly, but venues had missing postal codes
+
+**Root Cause**:
+In `venue_collector.js`, the code was using direct access to `doc.address_parts.zip` instead of the proper API method `doc.getAddress('zip')`:
+
+```javascript
+// ❌ WRONG - Direct access to internal structure
+venueData.address_parts = {
+  zip: doc.address_parts.zip || ''
+};
+```
+
+The `doc.address_parts` is an internal structure, while `doc.getAddress()` is the correct public API method.
+
+**Solution**:
+Changed `venue_collector.js` to use `doc.getAddress('zip')` consistently with `house_numbers_collector.js`:
+
+```javascript
+// ✅ CORRECT - Use API method
+const zip = doc.getAddress('zip');
+venueData.address_parts = {
+  zip: zip || ''
+};
+```
+
+**Impact**:
+- ✅ Venues now correctly include `postalcode` in API responses
+- ✅ Consistent with how addresses and streets handle postal codes
+- ✅ Example: `"postalcode": "51-180"` for Szkutnicza 12
+
+**Files Changed**:
+- `stream/venue_collector.js` - Use `doc.getAddress()` instead of direct `doc.address_parts` access
+
+---
+
+### v2.2.0 (2026-01-03)
+
+**✨ NEW FEATURE: Full Address Data for All Document Types**
+
+**Feature**: Add complete address information (street, housenumber, postalcode) to all document types: addresses, streets, and venues/POI.
+
+**Problem**: 
+- ❌ Address documents were missing `postalcode` field
+- ❌ Street documents were missing `postalcode` field  
+- ❌ Venue/POI documents were missing `street`, `housenumber`, and `postalcode` fields
+- This data exists in OSM but was not being stored or restored in the V2 pipeline
+
+**Root Cause**:
+In the V2 pipeline (WOF lookup in Pass 1, LevelDB aggregation, Pass 2 document generation):
+- `house_numbers_collector.js` was not saving `zip` to LevelDB aggregates
+- `venue_collector.js` was only saving city/state/country, not full address_parts
+- `pass2_document_generator.js` was not restoring these fields when generating documents
+
+**Solution**:
+1. **`house_numbers_collector.js`**: Save `zip` field to street aggregates in LevelDB
+2. **`pass2_document_generator.js`**: Restore `zip` for both street and address documents  
+3. **`venue_collector.js`**: Save complete `address_parts` (street, number, zip, name) to LevelDB
+4. **`pass2_document_generator.js`**: Restore full `address_parts` for venue documents
+
+**Example Before:**
+```json
+{
+  "name": "Port Lotniczy Wrocław",
+  "locality": "Wrocław"
+  // ❌ Missing: street, housenumber, postalcode
+}
+```
+
+**Example After:**
+```json
+{
+  "name": "Port Lotniczy Wrocław",
+  "street": "Graniczna",
+  "housenumber": "190",
+  "postalcode": "54-530",
+  "locality": "Wrocław"
+}
+```
+
+**Benefits**:
+- ✅ **Complete address data**: All documents now have full address information when available in OSM
+- ✅ **Better search**: Users can search by street name for POI
+- ✅ **Proper labels**: API responses include complete address strings
+- ✅ **Consistent data**: Same fields available across all document types (address, street, venue)
+
+**Files Changed**:
+- `stream/house_numbers_collector.js` - Add zip to aggregate, update zip if not set
+- `stream/pass2_document_generator.js` - Restore zip for streets and addresses, restore address_parts for venues
+- `stream/venue_collector.js` - Save full address_parts to LevelDB
+
+**API Response Impact**:
+- Before: `"label": "Szkutnicza 10, Wrocław, Polska"` (no postalcode)
+- After: `"label": "Szkutnicza 10, 54-130 Wrocław, Polska"` (with postalcode)
+
+---
+
+### v2.1.0 (2026-01-03)
+
+**✨ NEW FEATURE: Alternative Names for Venues/POI**
+
+**Feature**: Create separate Pelias documents for each alternative name (alt_name, short_name, official_name) of OSM venues/POI.
+
+**Problem**: OSM venues often have multiple names (alternative, short, official), but previously only the main name was searchable as a primary document.
+
+**Example OSM tags**:
+```
+name: "Port Lotniczy Wrocław"
+alt_name: "Wrocław-Strachowice"
+short_name: "Lotnisko Wrocław"
+official_name: "Port Lotniczy Wrocław im. Mikołaja Kopernika"
+```
+
+**Result**: 4 separate searchable documents are now created:
+1. `node/123456` → name="Port Lotniczy Wrocław"
+2. `node/123456_alt1` → name="Wrocław-Strachowice"
+3. `node/123456_short` → name="Lotnisko Wrocław"
+4. `node/123456_official` → name="Port Lotniczy Wrocław im. Mikołaja Kopernika"
+
+**Benefits**:
+- ✅ **Better discoverability**: Users can find venues by any of their names
+- ✅ **Original name preserved**: Each alternative stores the original name in `addendum.osm.original_name`
+- ✅ **Consistent hierarchy**: All alternatives share the same WOF admin hierarchy
+- ✅ **Semicolon support**: alt_name with semicolon-separated values creates multiple documents
+
+**Implementation**:
+- Modified `stream/venue_collector.js` to extract alternative names from OSM tags and create multiple LevelDB records (one per name)
+- Modified `stream/pass2_document_generator.js` to add `original_name` to document addendum
+- ID suffixes: `_alt1`, `_alt2`, `_short`, `_official`
+
+**Statistics Impact**:
+- Before: ~110,795 venues (Dolnośląskie region)
+- After: ~150,000+ venues (with alternatives)
+
+**Files Changed**:
+- `stream/venue_collector.js` - Extract and create multiple records for alternative names
+- `stream/pass2_document_generator.js` - Add original_name to addendum
+
+---
 
 ### v2.0.1 (2026-01-03)
 

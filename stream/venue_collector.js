@@ -48,9 +48,9 @@ module.exports = function() {
         db = new Level(DB_PATH, { valueEncoding: 'json' });
         await db.open();
         
-        peliasLogger.info('[venue_collector_v2] LevelDB opened at %s', DB_PATH);
+        peliasLogger.info('[venue_collector] LevelDB opened at %s', DB_PATH);
       } catch (err) {
-        peliasLogger.error('[venue_collector_v2] Error opening database:', err);
+        peliasLogger.error('[venue_collector] Error opening database:', err);
       }
     }
   };
@@ -62,7 +62,7 @@ module.exports = function() {
         initDB().then(() => {
           processDocument(doc, next);
         }).catch(err => {
-          peliasLogger.error('[venue_collector_v2] DB init failed:', err);
+          peliasLogger.error('[venue_collector] DB init failed:', err);
           next();
         });
       } else {
@@ -74,12 +74,12 @@ module.exports = function() {
       // Final flush
       const closeDB = () => {
         if (db) {
-          peliasLogger.info('[venue_collector_v2] Closing database');
+          peliasLogger.info('[venue_collector] Closing database');
           db.close().then(() => {
-            peliasLogger.info('[venue_collector_v2] Database closed successfully');
+            peliasLogger.info('[venue_collector] Database closed successfully');
             done();
           }).catch((err) => {
-            peliasLogger.error('[venue_collector_v2] Error closing database:', err);
+            peliasLogger.error('[venue_collector] Error closing database:', err);
             done(err);
           });
         } else {
@@ -90,14 +90,14 @@ module.exports = function() {
       if (buffer.length > 0 && db) {
         flushBuffer(db, buffer, () => {
           peliasLogger.info(
-            '[venue_collector_v2] Final flush: %d venues/POI saved to LevelDB',
+            '[venue_collector] Final flush: %d venues/POI (including alternative names) saved to LevelDB',
             totalVenues
           );
           closeDB();
         });
       } else {
         if (totalVenues === 0) {
-          peliasLogger.info('[venue_collector_v2] No venues to save');
+          peliasLogger.info('[venue_collector] No venues to save (including alternative names)');
         }
         closeDB(); // Close DB even if buffer is empty!
       }
@@ -117,11 +117,37 @@ module.exports = function() {
           return next(); // Skip documents without valid coordinates
         }
         
-        // Create venue data object
+        // Extract OSM tags for alternative names
+        const tags = doc.getMeta('tags');
+        const originalName = name || (tags && tags.name) || '';
+        
+        // Parse alternative names from OSM tags
+        const altNames = [];
+        
+        if (tags) {
+          // Parse alt_name (semicolon-separated)
+          if (tags.alt_name) {
+            const parsed = tags.alt_name.split(';').map(n => n.trim()).filter(n => n);
+            parsed.forEach((n, idx) => altNames.push({ type: 'alt', name: n, index: idx + 1 }));
+          }
+          
+          // Parse short_name
+          if (tags.short_name && tags.short_name.trim()) {
+            altNames.push({ type: 'short', name: tags.short_name.trim() });
+          }
+          
+          // Parse official_name
+          if (tags.official_name && tags.official_name.trim()) {
+            altNames.push({ type: 'official', name: tags.official_name.trim() });
+          }
+        }
+        
+        // Create venue data object for main name
         const venueData = {
           id: id,
           layer: layer,
-          name: name || '',
+          name: originalName,
+          original_name: originalName,  // Store original name
           lat: centroid.lat,
           lon: centroid.lon,
           parent: {}
@@ -137,7 +163,22 @@ module.exports = function() {
           }
         }
         
-        // Copy OSM admin data if available (from addr:* tags)
+        // Copy full address parts if available (street, number, zip, etc.)
+        // Use getAddress() method to access address fields properly
+        const street = doc.getAddress('street');
+        const number = doc.getAddress('number');
+        const zip = doc.getAddress('zip');
+        
+        if (street || number || zip) {
+          venueData.address_parts = {
+            street: street || '',
+            number: number || '',
+            zip: zip || '',
+            name: doc.getAddress('name') || ''
+          };
+        }
+        
+        // Also keep osmAdmin for backward compatibility
         if (doc.address_parts) {
           venueData.osmAdmin = {
             city: doc.address_parts.city || '',
@@ -149,9 +190,38 @@ module.exports = function() {
         // Generate key: venue|layer|id
         const key = `venue|${layer}|${id}`;
         
-        // Add to buffer
+        // Add main venue to buffer
         buffer.push({ key, value: venueData });
         totalVenues++;
+        
+        // Create records for alternative names
+        altNames.forEach((alt) => {
+          const suffix = alt.type === 'alt' ? `_alt${alt.index}` : `_${alt.type}`;
+          const altKey = `venue|${layer}|${id}${suffix}`;
+          
+          const altVenueData = {
+            id: `${id}${suffix}`,
+            layer: layer,
+            name: alt.name,
+            original_name: originalName,  // Store original name
+            lat: centroid.lat,
+            lon: centroid.lon,
+            parent: { ...venueData.parent }  // Same hierarchy
+          };
+          
+          // Copy address parts if present
+          if (venueData.address_parts) {
+            altVenueData.address_parts = { ...venueData.address_parts };
+          }
+          
+          // Copy OSM admin if present
+          if (venueData.osmAdmin) {
+            altVenueData.osmAdmin = { ...venueData.osmAdmin };
+          }
+          
+          buffer.push({ key: altKey, value: altVenueData });
+          totalVenues++;
+        });
         
         // Flush buffer if full
         if (buffer.length >= BUFFER_SIZE) {
@@ -163,7 +233,7 @@ module.exports = function() {
           next();
         }
       } catch (err) {
-        peliasLogger.error('[venue_collector_v2] Error processing document:', err);
+        peliasLogger.error('[venue_collector] Error processing document:', err);
         next();
       }
   }
@@ -189,7 +259,7 @@ function flushBuffer(db, buffer, callback) {
       }
       callback();
     } catch (err) {
-      peliasLogger.error('[venue_collector_v2] Error flushing buffer:', err);
+      peliasLogger.error('[venue_collector] Error flushing buffer:', err);
       callback(err);
     }
   })();

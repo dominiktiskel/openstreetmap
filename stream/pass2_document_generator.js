@@ -206,6 +206,11 @@ module.exports = function() {
                 }
               }
               
+              // Add postal code if available
+              if (data.zip && data.zip.trim()) {
+                streetDoc.setAddress('zip', data.zip.trim());
+              }
+              
               // Push street document downstream
               self.push(streetDoc);
               streetsGenerated++;
@@ -222,6 +227,11 @@ module.exports = function() {
                       .setCentroid({ lat: avgLat, lon: avgLon })  // Use street centroid
                       .setAddress('street', streetName)
                       .setAddress('number', houseNumber);
+                    
+                    // Add postal code if available
+                    if (data.zip && data.zip.trim()) {
+                      addressDoc.setAddress('zip', data.zip.trim());
+                    }
                     
                     // Copy same admin hierarchy as street
                     if (data.osmAdmin) {
@@ -316,6 +326,26 @@ function generateVenueDocument(venueData) {
     // Add name if available
     if (venueData.name && venueData.name.trim()) {
       venueDoc.setName('default', venueData.name.trim());
+    }
+    
+    // Add original_name to addendum if this is an alternative name
+    if (venueData.original_name && venueData.original_name.trim()) {
+      venueDoc.setAddendum('osm', {
+        original_name: venueData.original_name.trim()
+      });
+    }
+    
+    // Restore full address parts if available (street, number, zip)
+    if (venueData.address_parts) {
+      if (venueData.address_parts.street && venueData.address_parts.street.trim()) {
+        venueDoc.setAddress('street', venueData.address_parts.street.trim());
+      }
+      if (venueData.address_parts.number && venueData.address_parts.number.trim()) {
+        venueDoc.setAddress('number', venueData.address_parts.number.trim());
+      }
+      if (venueData.address_parts.zip && venueData.address_parts.zip.trim()) {
+        venueDoc.setAddress('zip', venueData.address_parts.zip.trim());
+      }
     }
     
     // Copy FULL admin hierarchy from venue data (already from WOF in Pass 1!)

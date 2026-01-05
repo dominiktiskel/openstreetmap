@@ -11,7 +11,9 @@
 **/
 
 const OSM_SCHEMA = {
-  'postal_code': 'zip'
+  'postal_code': 'zip',
+  'postcode': 'zip',      // Alternative OSM tag
+  'post_code': 'zip'      // Alternative OSM tag
 };
 
 module.exports = OSM_SCHEMA;

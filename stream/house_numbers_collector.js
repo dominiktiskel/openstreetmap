@@ -132,6 +132,7 @@ async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
               count: existingAggregate.centroid.count + bufferAggregate.centroid.count
             },
             streetName: existingAggregate.streetName || bufferAggregate.streetName,
+            zip: existingAggregate.zip || bufferAggregate.zip || '',  // Merge zip - prefer existing non-empty
             // Merge osmAdmin - prefer existing non-empty values
             osmAdmin: {
               locality: existingAggregate.osmAdmin?.locality || bufferAggregate.osmAdmin?.locality || '',
@@ -149,6 +150,7 @@ async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
             numbers: Array.from(bufferAggregate.numbers).sort(naturalSort),
             centroid: bufferAggregate.centroid,
             streetName: bufferAggregate.streetName,
+            zip: bufferAggregate.zip || '',  // Include zip in new aggregate
             osmAdmin: {
               locality: bufferAggregate.osmAdmin?.locality || '',
               localadmin: bufferAggregate.osmAdmin?.localadmin || '',
@@ -217,10 +219,12 @@ module.exports = function() {
             let aggregate = buffer.get(streetKey);
             if (!aggregate) {
               // New street in buffer
+              const initialZip = doc.getAddress('zip') || '';
               aggregate = {
                 numbers: new Set(),
                 centroid: { lat: 0, lon: 0, count: 0 },
                 streetName: doc.getAddress('street') || '',
+                zip: initialZip,  // Postal code
                 // Store FULL hierarchy from WOF (doc.parent)
                 osmAdmin: {
                   locality: doc.parent?.locality?.[0] || '',
@@ -250,6 +254,11 @@ module.exports = function() {
             // Update streetName if not set
             if (!aggregate.streetName && doc.getAddress('street')) {
               aggregate.streetName = doc.getAddress('street');
+            }
+            
+            // Update zip if not set
+            if (!aggregate.zip && doc.getAddress('zip')) {
+              aggregate.zip = doc.getAddress('zip');
             }
             
             // Periodic batch write
