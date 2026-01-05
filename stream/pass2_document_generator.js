@@ -328,6 +328,11 @@ function generateVenueDocument(venueData) {
       venueDoc.setName('default', venueData.name.trim());
     }
     
+    // Add street name as name alias for better search (e.g., "Biedronka Sułowska")
+    if (venueData.name_with_street && venueData.name_with_street.trim()) {
+      venueDoc.setNameAlias('default', venueData.name_with_street.trim());
+    }
+    
     // Add original_name to addendum if this is an alternative name
     if (venueData.original_name && venueData.original_name.trim()) {
       venueDoc.setAddendum('osm', {

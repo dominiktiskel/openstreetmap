@@ -176,6 +176,11 @@ module.exports = function() {
             zip: zip || '',
             name: doc.getAddress('name') || ''
           };
+          
+          // If has street, create name_with_street for search alias
+          if (street && street.trim() && originalName) {
+            venueData.name_with_street = `${originalName} ${street.trim()}`;
+          }
         }
         
         // Also keep osmAdmin for backward compatibility
@@ -212,6 +217,11 @@ module.exports = function() {
           // Copy address parts if present
           if (venueData.address_parts) {
             altVenueData.address_parts = { ...venueData.address_parts };
+            
+            // Create name_with_street for alternative name too
+            if (venueData.address_parts.street && venueData.address_parts.street.trim() && alt.name) {
+              altVenueData.name_with_street = `${alt.name} ${venueData.address_parts.street.trim()}`;
+            }
           }
           
           // Copy OSM admin if present

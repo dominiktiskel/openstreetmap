@@ -9,7 +9,7 @@ This fork contains custom modifications to prioritize OpenStreetMap administrati
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.2.5`
+- **Docker Image**: `tiskel/openstreetmap:v2.3.0`
 
 ## Key Features
 
@@ -402,6 +402,76 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.3.0 (2026-01-05)
+
+**🔍 FEATURE: POI search by street name using name aliases**
+
+**Problem**: 
+Searching for `"Biedronka Sułowska"` (POI + street) didn't find results because Pelias API doesn't automatically combine `name.default` with `address_parts.street` in queries. While direct Elasticsearch queries worked, API autocomplete queries failed.
+
+**Solution**:
+For all POI/venues that have `address_parts.street`, add the street name to the POI's name as a **searchable alias** using `setNameAlias()`. This creates searchable name variations without duplicating documents.
+
+**Implementation**:
+
+1. **`venue_collector.js` (Pass 1 - LevelDB storage)**:
+   - When saving venue to LevelDB, if `address_parts.street` exists, create `name_with_street = "POI Name StreetName"`
+   - Applied to both main venues and alternative name venues
+   - Example: `name_with_street: "Biedronka Sułowska"`
+
+2. **`pass2_document_generator.js` (Pass 2 - ES document generation)**:
+   - When generating venue document, if `name_with_street` exists, add it as name alias using `setNameAlias('default', ...)`
+   - Original name preserved in `addendum.osm.original_name`
+
+**Result in Elasticsearch**:
+```json
+{
+  "name": {
+    "default": ["Biedronka", "Biedronka Sułowska"]
+  },
+  "address_parts": {
+    "street": "Sułowska"
+  },
+  "addendum": {
+    "osm": {
+      "original_name": "Biedronka"
+    }
+  }
+}
+```
+
+**User Experience**:
+- ✅ `"Biedronka"` → finds all Biedronka stores
+- ✅ `"Biedronka Sułowska"` → finds Biedronka on Sułowska street
+- ✅ `"Sułowska"` → finds street + all POI on that street
+- ✅ Original name always accessible via API addendum
+
+**Scope**: 
+- Applies to ALL venues/POI with street address (no filtering by POI type)
+- Only street name added (house number NOT included)
+- Works with alternative names from v2.1.0 (alt_name, short_name, official_name)
+
+**Testing**:
+```bash
+# Test POI by name only
+curl "http://localhost:4000/v1/autocomplete?text=Biedronka"
+
+# Test POI by name + street (NEW!)
+curl "http://localhost:4000/v1/autocomplete?text=Biedronka%20Sułowska"
+
+# Verify ES document structure
+curl "http://localhost:9200/pelias/_search?q=name.default:Biedronka&pretty"
+# Should show name.default as array with both "Biedronka" and "Biedronka Sułowska"
+```
+
+**Files Changed**:
+- `stream/venue_collector.js` - Add `name_with_street` field to LevelDB storage
+- `stream/pass2_document_generator.js` - Use `setNameAlias()` for combined name
+
+**Performance Impact**: Minimal - uses name aliases (single document with multiple name values) instead of duplicate documents.
+
+---
 
 ### v2.2.5 (2026-01-03)
 
