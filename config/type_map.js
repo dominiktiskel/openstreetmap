@@ -27,6 +27,34 @@
  */
 
 module.exports = {
+  'aeroway': {
+    'aerodrome': {
+      type: 'aerodrome',
+      type_name_pl: 'Lotnisko',
+      type_aliases_pl: ['Port lotniczy', 'Lądowisko']
+    },
+    'heliport': {
+      type: 'heliport',
+      type_name_pl: 'Lądowisko dla helikopterów',
+      type_aliases_pl: ['Heliport']
+    },
+    'helipad': {
+      type: 'helipad',
+      type_name_pl: 'Lądowisko helikopterowe',
+      type_aliases_pl: ['Helipad']
+    },
+    'aerodrome_gate': {
+      type: 'aerodrome_gate',
+      type_name_pl: 'Bramka lotniskowa',
+      type_aliases_pl: ['Gate', 'Bramka']
+    },
+    'terminal': {
+      type: 'terminal',
+      type_name_pl: 'Terminal lotniczy',
+      type_aliases_pl: ['Terminal']
+    }
+  },
+  
   'amenity': {
     // Transportation
     'bus_stop':           { type: 'bus_stop', type_name_pl: 'Przystanek autobusowy', type_aliases_pl: ['Przystanek'] },
