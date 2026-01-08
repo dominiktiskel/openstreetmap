@@ -112,10 +112,10 @@ module.exports = function() {
         const id = doc.getId();
         const name = doc.getName('default');
         const centroid = doc.getCentroid();
+        const tags = doc.getMeta('tags');
         
         if (!centroid || !centroid.lat || !centroid.lon) {
           // DEBUG: Log when we skip documents without centroid
-          const tags = doc.getMeta('tags');
           if( tags && tags.aeroway === 'aerodrome' ){
             peliasLogger.warn('[venue_collector] SKIPPING aerodrome without centroid: %s (%s)', 
               tags.name || 'unnamed', doc.getId());
@@ -124,14 +124,12 @@ module.exports = function() {
         }
         
         // DEBUG: Log when we process aerodrome
-        const tags = doc.getMeta('tags');
         if( tags && tags.aeroway === 'aerodrome' ){
           peliasLogger.info('[venue_collector] Processing aerodrome: %s (%s) with centroid: lat=%s lon=%s', 
             tags.name || 'unnamed', doc.getId(), centroid.lat, centroid.lon);
         }
         
         // Extract OSM tags for alternative names
-        const tags = doc.getMeta('tags');
         const originalName = name || (tags && tags.name) || '';
         
         // Parse alternative names from OSM tags
