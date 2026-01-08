@@ -84,8 +84,8 @@ module.exports = {
     'cafe':               { type: 'cafe', type_name_pl: 'Kawiarnia', type_aliases_pl: ['Cafe', 'Kafejka'] },
     'pub':                { type: 'pub', type_name_pl: 'Pub', type_aliases_pl: ['Piwiarnia', 'Pub', 'Bar', 'Restauracja'] },
     'bar':                { type: 'bar', type_name_pl: 'Bar', type_aliases_pl: ['Bar', 'Restauracja'] },
-    'biergarten':         { type: 'biergarten', type_name_pl: 'Ogródek piwny', type_aliases_pl: ['Pijalnia piwa'] },
-    'food_court':         { type: 'food_court', type_name_pl: 'Strefa gastronomiczna', type_aliases_pl: ['Food court'] },
+    'biergarten':         { type: 'biergarten', type_name_pl: 'Ogródek piwny', type_aliases_pl: ['Pijalnia piwa', 'Ogródek piwny', 'Bar', 'Pub', 'Restauracja'] },
+    'food_court':         { type: 'food_court', type_name_pl: 'Strefa gastronomiczna', type_aliases_pl: ['Food court', 'Strefa gastronomiczna', 'Bar', 'Pub', 'Restauracja'] },
     'ice_cream':          { type: 'ice_cream', type_name_pl: 'Lodziarnia', type_aliases_pl: ['Lody'] },
     
     // Education
