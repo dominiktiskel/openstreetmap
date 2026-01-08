@@ -455,6 +455,17 @@ Pass 2: LevelDB [streets | venues | localities] → pass2_document_generator →
    - Generates documents with `layer=locality`
    - Cleanup for localities DB after successful import
 
+7. **Modified: `popularity_mapper.js`**:
+   - Added `'locality'` to supported layers
+   - Localities receive **high base popularity: 10,000** (more important than POI venues)
+   - Population-based boost from OSM `population` tag:
+     - Cities > 100k: score 50,000
+     - Cities > 50k: score 30,000
+     - Towns > 10k: score 20,000
+     - Large villages > 1k: score 15,000
+     - Small villages: score 10,000
+   - **Result**: Localities rank higher than POI venues in search results
+
 **Detection Logic Examples**:
 
 | OSM Tags | Layer | Reason |
@@ -501,6 +512,7 @@ Pass 2: LevelDB [streets | venues | localities] → pass2_document_generator →
 - `stream/importPipeline.js` - Added locality_extractor to pipeline
 - `stream/document_splitter.js` - Added routing for localities
 - `stream/pass2_document_generator.js` - Added localities DB reading
+- `stream/popularity_mapper.js` - Added high popularity scoring for localities
 
 **Files Added**:
 - `stream/locality_extractor.js` - Stream for detecting localities

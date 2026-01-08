@@ -20,8 +20,27 @@ module.exports = function(){
 
     try {
 
-      // only map venues
-      if( !['venue', 'address'].includes(doc.getLayer()) ){
+      // only map venues, addresses, and localities
+      if( !['venue', 'address', 'locality'].includes(doc.getLayer()) ){
+        return next(null, doc);
+      }
+      
+      // localities get high base popularity (they are important places)
+      if( doc.getLayer() === 'locality' ){
+        let popularity = 10000; // High base score for localities
+        
+        // Boost based on population if available
+        let tags = doc.getMeta('tags');
+        if( tags && tags.population ){
+          const pop = parseInt(tags.population);
+          if( pop > 100000 ) popularity = 50000;      // Large city
+          else if( pop > 50000 ) popularity = 30000;  // City
+          else if( pop > 10000 ) popularity = 20000;  // Town
+          else if( pop > 1000 ) popularity = 15000;   // Large village
+          // else: default 10000 for small villages
+        }
+        
+        doc.setPopularity(popularity);
         return next(null, doc);
       }
 
