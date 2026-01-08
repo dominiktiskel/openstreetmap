@@ -154,10 +154,9 @@ module.exports = function() {
           categories: []  // Store categories for Pass 2
         };
         
-        // Copy categories if available
-        const categories = doc.getCategories();
-        if (categories && categories.length > 0) {
-          venueData.categories = categories;
+        // Copy categories if available (direct property access, not a method)
+        if (doc.category && doc.category.length > 0) {
+          venueData.categories = doc.category;
         }
         
         // Copy full parent hierarchy from WOF lookup
