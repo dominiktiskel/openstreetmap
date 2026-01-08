@@ -372,6 +372,20 @@ function generateVenueDocument(venueData) {
       venueDoc.setNameAlias('default', venueData.name_with_street.trim());
     }
     
+    // Add type name as name alias (e.g., "Gabinet stomatologiczny")
+    if (venueData.osm_type_name_pl && venueData.osm_type_name_pl.trim()) {
+      venueDoc.setNameAlias('default', venueData.osm_type_name_pl.trim());
+    }
+    
+    // Add all type aliases as name aliases (e.g., "Dentysta", "Stomatolog")
+    if (venueData.osm_type_aliases_pl && Array.isArray(venueData.osm_type_aliases_pl)) {
+      venueData.osm_type_aliases_pl.forEach(alias => {
+        if (alias && alias.trim()) {
+          venueDoc.setNameAlias('default', alias.trim());
+        }
+      });
+    }
+    
     // Add original_name to addendum if this is an alternative name
     if (venueData.original_name && venueData.original_name.trim()) {
       venueDoc.setAddendum('osm', {

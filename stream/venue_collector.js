@@ -169,6 +169,12 @@ module.exports = function() {
           venueData.osm_type_name_pl = osmTypeName;
         }
         
+        // Copy type aliases if available
+        const osmTypeAliases = doc.getMeta('osm_type_aliases_pl');
+        if (osmTypeAliases && Array.isArray(osmTypeAliases)) {
+          venueData.osm_type_aliases_pl = osmTypeAliases;
+        }
+        
         // Copy full parent hierarchy from WOF lookup
         if (doc.parent) {
           const hierarchyLevels = ['locality', 'localadmin', 'county', 'borough', 'neighbourhood', 'region', 'country'];
@@ -256,6 +262,11 @@ module.exports = function() {
           }
           if (venueData.osm_type_name_pl) {
             altVenueData.osm_type_name_pl = venueData.osm_type_name_pl;
+          }
+          
+          // Copy type aliases (same as main venue)
+          if (venueData.osm_type_aliases_pl) {
+            altVenueData.osm_type_aliases_pl = venueData.osm_type_aliases_pl;
           }
           
           buffer.push({ key: altKey, value: altVenueData });

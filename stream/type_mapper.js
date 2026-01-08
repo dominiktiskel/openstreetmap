@@ -48,6 +48,11 @@ module.exports = function(typeMapping) {
       if (typeData) {
         doc.setMeta('osm_type', typeData.type);
         doc.setMeta('osm_type_name_pl', typeData.type_name_pl);
+        
+        // Store type aliases if available
+        if (typeData.type_aliases_pl && Array.isArray(typeData.type_aliases_pl)) {
+          doc.setMeta('osm_type_aliases_pl', typeData.type_aliases_pl);
+        }
       }
 
     } catch(e) {

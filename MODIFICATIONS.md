@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.6.0
+## Version: v2.6.1
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.6.0`
+- **Docker Image**: `tiskel/openstreetmap:v2.6.1`
 
 ## Key Features
 
@@ -402,6 +402,109 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.6.1 (2026-01-08)
+
+**🔍 ENHANCEMENT: POI Type Name Search Aliases**
+
+**Problem**: 
+Users search for POIs using different Polish naming variants. For example, searching for "Dentysta" wouldn't find dentists if only "Gabinet stomatologiczny" was indexed. Similarly, "Mechanik" wouldn't find "Warsztat samochodowy". The `type_name` field (introduced in v2.6.0) was stored in `addendum.osm` but NOT searchable.
+
+**Solution**:
+Extended the type system with searchable aliases:
+- Added `type_aliases_pl` array to all POI types in `type_map.js`
+- Both `type_name` AND all aliases added as search aliases using `setNameAlias()`
+- Users can now find POIs by any naming variant
+- No duplicate ES documents created (uses name alias mechanism)
+
+**Example Aliases**:
+- `dentist`: "Gabinet stomatologiczny" + aliases: ["Dentysta", "Stomatolog"]
+- `car_repair`: "Warsztat samochodowy" + aliases: ["Warsztat", "Mechanik", "Serwis samochodowy"]
+- `pharmacy`: "Apteka" + aliases: ["Punkt apteczny"]
+- `supermarket`: "Supermarket" + aliases: ["Market", "Sklep spożywczy"]
+
+**Architecture**:
+
+```
+Pass 1:
+type_mapper → stores type_name_pl + type_aliases_pl → venue_collector → LevelDB
+
+Pass 2:
+LevelDB → pass2_generator → setNameAlias(type_name) + setNameAlias(each alias) → ES
+```
+
+**Implementation**:
+
+1. **MODIFIED: `config/type_map.js`**:
+   - Added `type_aliases_pl: []` array to all 100+ POI types
+   - Populated with common Polish naming variants
+   - Examples: ["Dentysta", "Stomatolog"], ["Mechanik", "Warsztat"], ["Market"]
+
+2. **MODIFIED: `stream/type_mapper.js`**:
+   - Store `type_aliases_pl` in document metadata (if present)
+   - Passed to venue_collector for LevelDB persistence
+
+3. **MODIFIED: `stream/venue_collector.js`**:
+   - Save `osm_type_aliases_pl` to LevelDB
+   - Copy aliases to alternative names
+
+4. **MODIFIED: `stream/pass2_document_generator.js`**:
+   - Add `type_name` as name alias via `setNameAlias()`
+   - Add each alias as name alias via `setNameAlias()`
+   - All aliases searchable without duplicate documents
+
+**Example ES Document** (single document with multiple search aliases):
+
+```json
+{
+  "name": {
+    "default": "Centrum Stomatologii Dr. Kowalski"
+  },
+  "name_alias": {
+    "default": [
+      "Centrum Stomatologii Dr. Kowalski Główna",
+      "Gabinet stomatologiczny",
+      "Dentysta",
+      "Stomatolog"
+    ]
+  },
+  "addendum": {
+    "osm": {
+      "type": "dentist",
+      "type_name": "Gabinet stomatologiczny"
+    }
+  }
+}
+```
+
+**Search Results** - All find the same POI:
+- ✅ "Centrum Stomatologii" (name)
+- ✅ "Kowalski" (name)
+- ✅ "Główna" (street via name_with_street)
+- ✅ "Gabinet stomatologiczny" (type_name)
+- ✅ "Dentysta" (alias)
+- ✅ "Stomatolog" (alias)
+
+**Benefits**:
+- ✅ Multiple Polish naming variants searchable
+- ✅ No duplicate ES documents (uses name_alias)
+- ✅ Better user experience (natural language search)
+- ✅ ~100+ POI types covered with relevant aliases
+- ✅ Easy to extend with more aliases
+
+**Files Changed**:
+- MODIFIED: `config/type_map.js` - Added type_aliases_pl arrays
+- MODIFIED: `stream/type_mapper.js` - Store aliases in metadata
+- MODIFIED: `stream/venue_collector.js` - Save aliases to LevelDB
+- MODIFIED: `stream/pass2_document_generator.js` - Add aliases as name_alias
+
+**Rollout**:
+1. Build: `docker build -t tiskel/openstreetmap:v2.6.1 .`
+2. Re-import OSM data
+3. Verify: `curl "http://localhost:4000/v1/autocomplete?text=Dentysta"` (finds dentists)
+4. Verify: `curl "http://localhost:4000/v1/autocomplete?text=Mechanik"` (finds car_repair)
+
+---
 
 ### v2.6.0 (2026-01-08)
 
