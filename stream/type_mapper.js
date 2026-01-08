@@ -23,10 +23,11 @@ module.exports = function(typeMapping) {
       }
 
       // Find first matching type (priority order matters)
-      // Priority: amenity > highway > public_transport > shop > tourism > leisure > building
+      // Priority: aeroway > amenity > highway > public_transport > shop > tourism > leisure > building
       let typeData = null;
       
       const priorityKeys = [
+        'aeroway',
         'amenity',
         'highway', 
         'public_transport',
