@@ -44,6 +44,7 @@ const mapping = {
     'planetarium':              ['education','entertainment'],
     'theatre':                  ['education','entertainment'],
     'college':                  ['education'],
+    'driving_school':           ['education','professional'],
     'kindergarten':             ['education'],
     'school':                   ['education'],
     'university':               ['education'],
@@ -60,10 +61,14 @@ const mapping = {
     'embassy':                  ['government'],
     'fire_station':             ['government'],
     'police':                   ['government'],
+    'post_box':                 ['government'],
     'post_office':              ['government'],
+    'public_building':          ['government'],
     'ranger_station':           ['government','recreation'],
+    'recycling':                ['government'],
     'register_office':          ['government'],
     'townhall':                 ['government'],
+    'waste_disposal':           ['government'],
 
     'coworking_space':          ['professional'],
 
@@ -87,7 +92,12 @@ const mapping = {
     'marketplace':              ['food','retail'],
     'restaurant':               ['food','retail','nightlife'],
 
+    'bicycle_parking':          ['transport'],
     'bus_station':              ['transport','transport:public','transport:bus'],
+    'ferry_terminal':           ['transport','transport:public','transport:sea'],
+    'motorcycle_parking':       ['transport'],
+    'parking':                  ['transport'],
+    'parking_space':            ['transport'],
     'taxi':                     ['transport','transport:taxi'],
 
     'car_rental':               ['transport','professional'],
@@ -95,7 +105,12 @@ const mapping = {
     'charging_station':         ['transport','professional'],
     'fuel':                     ['transport','professional'],
 
-    'ferry_terminal':           ['transport','transport:sea']
+    'drinking_water':           ['public'],
+    'fountain':                 ['public'],
+    'internet_cafe':            ['professional'],
+    'telephone':                ['communication'],
+    'toilets':                  ['public'],
+    'vending_machine':          ['retail']
   },
 
   'building': {
@@ -121,6 +136,13 @@ const mapping = {
 
     'train_station':            ['transport','transport:station'],
     'transportation':           ['transport','transport:station']
+  },
+
+  'highway': {
+    'bus_stop':                 ['transport','transport:public','transport:bus'],
+    'platform':                 ['transport','transport:public'],
+    'rest_area':                ['transport'],
+    'services':                 ['transport','professional']
   },
 
   // experimental, import cuisines for food-related venues
@@ -281,7 +303,9 @@ const mapping = {
 
   'public_transport': {
     '*':                        ['transport','transport:public'],
-    'station':                  ['transport','transport:station']
+    'platform':                 ['transport','transport:public'],
+    'station':                  ['transport','transport:station'],
+    'stop_position':            ['transport','transport:public']
   },
 
   'railway': {

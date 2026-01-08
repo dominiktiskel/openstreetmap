@@ -150,8 +150,15 @@ module.exports = function() {
           original_name: originalName,  // Store original name
           lat: centroid.lat,
           lon: centroid.lon,
-          parent: {}
+          parent: {},
+          categories: []  // Store categories for Pass 2
         };
+        
+        // Copy categories if available
+        const categories = doc.getCategories();
+        if (categories && categories.length > 0) {
+          venueData.categories = categories;
+        }
         
         // Copy full parent hierarchy from WOF lookup
         if (doc.parent) {
@@ -227,6 +234,11 @@ module.exports = function() {
           // Copy OSM admin if present
           if (venueData.osmAdmin) {
             altVenueData.osmAdmin = { ...venueData.osmAdmin };
+          }
+          
+          // Copy categories (same as main venue)
+          if (venueData.categories && venueData.categories.length > 0) {
+            altVenueData.categories = venueData.categories;
           }
           
           buffer.push({ key: altKey, value: altVenueData });

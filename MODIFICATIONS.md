@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.4.0
+## Version: v2.5.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.4.0`
+- **Docker Image**: `tiskel/openstreetmap:v2.5.0`
 
 ## Key Features
 
@@ -402,6 +402,103 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.5.0 (2026-01-08)
+
+**🏷️ FEATURE: POI Categories in API Results**
+
+**Problem**: 
+API results didn't include POI type/category information (bus_stop, place_of_worship, etc.) despite OSM data containing these tags. Categories were computed in Pass 1 by `category_mapper.js` but not persisted to LevelDB. In Pass 2, when generating final documents from LevelDB, the original OSM tags were no longer available, so `category_mapper.js` couldn't add categories. This made it impossible to:
+- Identify what type of POI a feature is (bus stop, church, restaurant, etc.)
+- Filter search results by category
+- Display appropriate icons in UI
+- Provide better user experience with contextual information
+
+**Solution**:
+Implemented category persistence through the two-pass import pipeline:
+
+1. **Modified: `venue_collector.js` (Pass 1 - Save categories to LevelDB)**:
+   - Added `categories: []` field to `venueData` structure
+   - Copies categories from `doc.getCategories()` after `category_mapper` has processed the document
+   - Categories inherited by alternative names (alt_name, official_name, etc.)
+   - Categories stored in LevelDB alongside venue data
+
+2. **Modified: `pass2_document_generator.js` (Pass 2 - Restore categories)**:
+   - Added category restoration in `generateVenueDocument()` function
+   - Reads `venueData.categories` from LevelDB
+   - Calls `venueDoc.addCategory(category)` for each category
+   - Categories appear in final Elasticsearch documents
+
+3. **Enhanced: `config/category_map.js` (Complete OSM taxonomy)**:
+   - Added missing **amenity** values:
+     - Transportation: `bus_stop`, `parking`, `parking_space`, `bicycle_parking`, `motorcycle_parking`
+     - Public services: `public_building`, `post_box`, `recycling`, `waste_disposal`
+     - Public facilities: `toilets`, `drinking_water`, `fountain`
+     - Education: `driving_school`
+     - Other: `vending_machine`, `telephone`, `internet_cafe`
+   
+   - Added new **highway** category:
+     - `bus_stop`: ['transport','transport:public','transport:bus']
+     - `platform`: ['transport','transport:public']
+     - `rest_area`: ['transport']
+     - `services`: ['transport','professional']
+   
+   - Enhanced **public_transport** category:
+     - Added `platform`: ['transport','transport:public']
+     - Added `stop_position`: ['transport','transport:public']
+
+**Architecture**:
+
+```
+Pass 1:
+OSM → category_mapper (adds categories) → venue_collector → LevelDB (SAVES categories!)
+
+Pass 2:
+LevelDB (with categories) → pass2_generator (restores categories) → Elasticsearch (with categories!)
+```
+
+**Before (no categories)**:
+```json
+{
+  "properties": {
+    "id": "node/3616225229",
+    "name": "Psary – Parkowa",
+    "layer": "venue"
+  }
+}
+```
+
+**After (with categories)**:
+```json
+{
+  "properties": {
+    "id": "node/3616225229",
+    "name": "Psary – Parkowa",
+    "layer": "venue",
+    "category": ["transport", "transport:public", "transport:bus"]
+  }
+}
+```
+
+**Benefits**:
+- ✅ POI type visible in API results
+- ✅ Filter by category (e.g., `?categories=transport:bus` for all bus stops)
+- ✅ Better UI display (show appropriate icons based on category)
+- ✅ Complete OSM taxonomy support (90+ amenity types)
+- ✅ Multiple categories per POI (e.g., restaurant can be ['food','retail','nightlife'])
+- ✅ Backward compatible (existing imports still work, just without categories)
+
+**Example Queries**:
+- Bus stop: `/v1/autocomplete?text=Psary` → returns `["transport","transport:public","transport:bus"]`
+- Church: `/v1/autocomplete?text=Kościół` → returns `["religion"]`
+- Restaurant: `/v1/search?categories=food` → returns only food venues
+
+**Files Changed**:
+- `stream/venue_collector.js`: Save categories to LevelDB
+- `stream/pass2_document_generator.js`: Restore categories from LevelDB
+- `config/category_map.js`: Add 30+ missing OSM categories (highway, amenity extensions)
+
+---
 
 ### v2.4.0 (2026-01-08)
 

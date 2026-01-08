@@ -405,6 +405,13 @@ function generateVenueDocument(venueData) {
       }
     }
     
+    // Restore categories from Pass 1
+    if (venueData.categories && venueData.categories.length > 0) {
+      venueData.categories.forEach(category => {
+        venueDoc.addCategory(category);
+      });
+    }
+    
     return venueDoc;
     
   } catch (err) {
