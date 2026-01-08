@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.6.2
+## Version: v2.6.3
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.6.2`
+- **Docker Image**: `tiskel/openstreetmap:v2.6.3`
 
 ## Key Features
 
@@ -402,6 +402,68 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.6.3 (2026-01-08)
+
+**🐛 FIX: Large POI Missing Due to Centroid Calculation**
+
+**Problem**: 
+Large or complex OSM way polygons (e.g., `way/86218932` - Lotnisko Mirosławice with 35+ nodes) were not imported because:
+- `pbf2json` doesn't compute centroid for complex way polygons
+- `venue_collector.js:116` skips documents without centroid
+- Result: Large aerodromes, parks, cemeteries, industrial areas missing from search
+
+Smaller ways (e.g., `way/637964384` - Lotnisko Wrocław-Szymanów with 32 nodes) worked because pbf2json computed their centroid.
+
+**Root Cause**:
+`pbf2json` has a threshold for computing centroids. Ways with many nodes or complex geometries are skipped to improve performance. However, `pbf2json` ALWAYS provides `bounds` (min/max coordinates of all nodes).
+
+**Solution**:
+Added fallback in `stream/document_constructor.js` to calculate centroid from bounds when pbf2json doesn't provide centroid:
+
+```javascript
+// CUSTOM: Fallback - calculate centroid from bounds if not provided
+// pbf2json doesn't compute centroid for large/complex way polygons
+// but always provides bounds. Use center of bounds as centroid.
+else if( _.isPlainObject(item.bounds) ){
+  const bounds = item.bounds;
+  if( bounds.n && bounds.s && bounds.e && bounds.w ){
+    const lat = (parseFloat(bounds.n) + parseFloat(bounds.s)) / 2;
+    const lon = (parseFloat(bounds.e) + parseFloat(bounds.w)) / 2;
+    doc.setCentroid({ lat, lon });
+  }
+}
+```
+
+**Logic Flow**:
+1. Check if `item.lat` and `item.lon` exist (nodes) → use them
+2. Check if `item.centroid` exists (simple ways) → use it
+3. **NEW:** Check if `item.bounds` exists (complex ways) → calculate center
+4. If none → document has no centroid (will be filtered)
+
+**Benefits**:
+- ✅ Fixes missing large POI (aerodromes, parks, cemeteries, industrial areas)
+- ✅ No impact on existing working POI (uses same centroid if available)
+- ✅ Minimal code change (~8 lines)
+- ✅ Uses data already provided by pbf2json
+- ✅ Centroid accuracy sufficient for search (center of area is reasonable)
+
+**Example**:
+- Before: `curl "http://localhost:4000/v1/autocomplete?text=Lotnisko%20Mirosławice"` → no results
+- After: Returns `way/86218932` with centroid calculated from bounds
+
+**Files Changed**:
+- MODIFIED: `stream/document_constructor.js` - Add centroid fallback from bounds
+- MODIFIED: `MODIFICATIONS.md` - v2.6.3 changelog
+
+**Rollout**:
+1. Build: `docker build -t tiskel/openstreetmap:v2.6.3 .`
+2. Re-import OSM data
+3. Verify: `curl "http://localhost:4000/v1/autocomplete?text=Lotnisko%20Mirosławice"` (should now return results)
+
+**Related**: Also added `aeroway` type mappings in v2.6.3 for proper display of airport/heliport type names.
+
+----
 
 ### v2.6.2 (2026-01-08)
 

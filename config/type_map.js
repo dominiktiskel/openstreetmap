@@ -79,11 +79,11 @@ module.exports = {
     'social_centre':      { type: 'social_centre', type_name_pl: 'Ośrodek społeczny', type_aliases_pl: ['Centrum społeczne'] },
     
     // Food & Drink
-    'restaurant':         { type: 'restaurant', type_name_pl: 'Restauracja', type_aliases_pl: ['Lokal gastronomiczny', 'Jadłodajnia'] },
-    'fast_food':          { type: 'fast_food', type_name_pl: 'Bar szybkiej obsługi', type_aliases_pl: ['Fast food', 'Szybka obsługa'] },
+    'restaurant':         { type: 'restaurant', type_name_pl: 'Restauracja', type_aliases_pl: ['Lokal gastronomiczny', 'Jadłodajnia', 'Bar', 'Pub'] },
+    'fast_food':          { type: 'fast_food', type_name_pl: 'Bar szybkiej obsługi', type_aliases_pl: ['Fast food', 'Szybka obsługa', 'Restauracja', 'Bar', 'Pub'] },
     'cafe':               { type: 'cafe', type_name_pl: 'Kawiarnia', type_aliases_pl: ['Cafe', 'Kafejka'] },
-    'pub':                { type: 'pub', type_name_pl: 'Pub', type_aliases_pl: ['Piwiarnia'] },
-    'bar':                { type: 'bar', type_name_pl: 'Bar', type_aliases_pl: [] },
+    'pub':                { type: 'pub', type_name_pl: 'Pub', type_aliases_pl: ['Piwiarnia', 'Pub', 'Bar', 'Restauracja'] },
+    'bar':                { type: 'bar', type_name_pl: 'Bar', type_aliases_pl: ['Bar', 'Restauracja'] },
     'biergarten':         { type: 'biergarten', type_name_pl: 'Ogródek piwny', type_aliases_pl: ['Pijalnia piwa'] },
     'food_court':         { type: 'food_court', type_name_pl: 'Strefa gastronomiczna', type_aliases_pl: ['Food court'] },
     'ice_cream':          { type: 'ice_cream', type_name_pl: 'Lodziarnia', type_aliases_pl: ['Lody'] },

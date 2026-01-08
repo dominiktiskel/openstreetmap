@@ -40,6 +40,18 @@ module.exports = function(){
         }
       }
 
+      // CUSTOM: Fallback - calculate centroid from bounds if not provided
+      // pbf2json doesn't compute centroid for large/complex way polygons
+      // but always provides bounds. Use center of bounds as centroid.
+      else if( _.isPlainObject(item.bounds) ){
+        const bounds = item.bounds;
+        if( bounds.n && bounds.s && bounds.e && bounds.w ){
+          const lat = (parseFloat(bounds.n) + parseFloat(bounds.s)) / 2;
+          const lon = (parseFloat(bounds.e) + parseFloat(bounds.w)) / 2;
+          doc.setCentroid({ lat, lon });
+        }
+      }
+
       // set bounding box
       if( _.isPlainObject(item.bounds) ){
         doc.setBoundingBox({
