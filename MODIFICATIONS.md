@@ -438,7 +438,8 @@ Pass 2: LevelDB [streets | venues | localities] → pass2_document_generator →
 3. **New: `locality_collector.js` (Pass 1 collector)**:
    - Stores localities to dedicated LevelDB: `pelias-localities`
    - Key format: `locality|{id}` (e.g., `locality|node:123456`)
-   - Saves full WOF parent hierarchy and OSM admin data
+   - Saves full WOF parent hierarchy, OSM admin data, and postal code
+   - Extracts `postal_code` from OSM tags via `doc.getAddress('zip')`
    - **Simpler than venue_collector**: no alternative names, no address_parts, no name_with_street
 
 4. **Modified: `document_splitter.js`**:
@@ -453,6 +454,7 @@ Pass 2: LevelDB [streets | venues | localities] → pass2_document_generator →
    - Reads from three databases: streets, venues, **localities**
    - Added `generateLocalityDocument()` function
    - Generates documents with `layer=locality`
+   - Restores postal code from LevelDB to document
    - Cleanup for localities DB after successful import
 
 7. **Modified: `popularity_mapper.js`**:
@@ -482,11 +484,15 @@ Pass 2: LevelDB [streets | venues | localities] → pass2_document_generator →
 {
   "layer": "locality",
   "name": {
-    "default": "Krzyżanowice"
+    "default": "Kryniczno"
+  },
+  "address_parts": {
+    "zip": "55-114"
   },
   "parent": {
-    "county": ["Kłodzko"],
-    "region": ["dolnośląskie"],
+    "localadmin": ["gmina Wisznia Mała"],
+    "county": ["powiat trzebnicki"],
+    "region": ["województwo dolnośląskie"],
     "country": ["Polska"]
   },
   "source": "openstreetmap"

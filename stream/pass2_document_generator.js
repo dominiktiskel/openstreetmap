@@ -462,6 +462,11 @@ function generateLocalityDocument(localityData) {
       }
     }
     
+    // Add postal code if available
+    if (localityData.postalcode && localityData.postalcode.trim()) {
+      localityDoc.setAddress('zip', localityData.postalcode.trim());
+    }
+    
     return localityDoc;
     
   } catch (err) {

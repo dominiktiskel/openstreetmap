@@ -151,6 +151,12 @@ module.exports = function() {
           }
         }
         
+        // Copy postal code if available
+        const postalCode = doc.getAddress('zip');
+        if (postalCode && postalCode.trim()) {
+          localityData.postalcode = postalCode.trim();
+        }
+        
         // Add to buffer
         buffer.push({ key: key, value: localityData });
         totalLocalities++;
