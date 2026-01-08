@@ -16,6 +16,7 @@
  */
 
 var categoryDefaults = require('../config/category_map');
+var typeDefaults = require('../config/type_map');
 var through = require('through2');
 var peliasLogger = require('pelias-logger').get('openstreetmap');
 var peliasConfig = require('pelias-config').generate();
@@ -39,6 +40,7 @@ streams.houseNumbersCollector = require('./house_numbers_collector');
 streams.documentSplitter = require('./document_splitter');
 streams.pass2DocumentGenerator = require('./pass2_document_generator');
 streams.categoryMapper = require('./category_mapper');
+streams.typeMapper = require('./type_mapper');
 streams.addendumMapper = require('./addendum_mapper');
 streams.popularityMapper = require('./popularity_mapper');
 streams.dbMapper = require('pelias-model').createDocumentMapperStream;
@@ -65,6 +67,7 @@ streams.importPass1 = function(callback){
     .pipe( streams.localityExtractor() )
     .pipe( streams.blacklistStream() )
     .pipe( streams.categoryMapper( categoryDefaults ) )
+    .pipe( streams.typeMapper( typeDefaults ) )
     .pipe( streams.addendumMapper() )
     .pipe( streams.popularityMapper() )
     .pipe( streams.adminLookup() )  // WOF lookup in Pass 1!

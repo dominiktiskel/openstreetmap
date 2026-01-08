@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.5.0
+## Version: v2.6.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.5.0`
+- **Docker Image**: `tiskel/openstreetmap:v2.6.0`
 
 ## Key Features
 
@@ -402,6 +402,95 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.6.0 (2026-01-08)
+
+**🔤 FEATURE: POI Type System with Polish Names (Nominatim-inspired)**
+
+**Problem**: 
+While categories provided technical classification (e.g., ['transport','transport:public']), they weren't user-friendly. Users needed human-readable POI type names for display in UI (e.g., "Przystanek autobusowy" instead of technical categories).
+
+**Solution**:
+Implemented Nominatim-inspired type system with Polish names:
+- `type`: Single OSM type string (e.g., "bus_stop") - stored in `addendum.osm`
+- `type_name`: Polish user-friendly name (e.g., "Przystanek autobusowy") - stored in `addendum.osm`
+- 1:1 mapping from OSM tags (one tag = one type)
+- ~100+ common POI types with Polish translations
+- Automatically exposed in API via existing `addendum.osm` field
+
+**Architecture**:
+
+```
+Pass 1:
+OSM → type_mapper (assigns type based on OSM tags) → venue_collector (saves to LevelDB)
+
+Pass 2:
+LevelDB → pass2_generator (restores to addendum.osm) → Elasticsearch → API
+```
+
+**Implementation**:
+
+1. **NEW: `config/type_map.js`**:
+   - Comprehensive OSM tag to {type, type_name_pl} mapping
+   - Coverage: amenity, highway, public_transport, shop, tourism, leisure, building
+   - ~100+ POI types with Polish translations based on OSM wiki
+
+2. **NEW: `stream/type_mapper.js`**:
+   - Assigns type based on OSM tags in Pass 1 (after category_mapper)
+   - Priority order: amenity > highway > public_transport > shop > tourism > leisure > building
+   - Stores type data in document metadata for LevelDB persistence
+
+3. **MODIFIED: `stream/importPipeline.js`**:
+   - Integrated type_mapper into Pass 1 pipeline after category_mapper
+   - Loads type_map.js configuration
+
+4. **MODIFIED: `stream/venue_collector.js`**:
+   - Saves `osm_type` and `osm_type_name_pl` to LevelDB
+   - Type data inherited by alternative names
+
+5. **MODIFIED: `stream/pass2_document_generator.js`**:
+   - Restores type data from LevelDB
+   - Writes to `addendum.osm.type` and `addendum.osm.type_name`
+   - No Pelias Document model changes needed
+
+**Example Result in API** (`addendum.osm` already exposed):
+
+```json
+{
+  "properties": {
+    "name": "Psary – Parkowa",
+    "category": ["transport", "transport:public", "transport:bus"],
+    "addendum": {
+      "osm": {
+        "type": "bus_stop",
+        "type_name": "Przystanek autobusowy",
+        "original_name": "Psary – Parkowa"
+      }
+    }
+  }
+}
+```
+
+**Benefits**:
+- ✅ User-friendly POI type names in Polish
+- ✅ No API changes required (addendum.osm already exposed)
+- ✅ Compatible with existing category system
+- ✅ Easy to extend with more languages (type_name_en, type_name_de, etc.)
+- ✅ Based on OSM wiki and Nominatim standards
+
+**Files Changed**:
+- NEW: `config/type_map.js` - OSM to Polish name mapping
+- NEW: `stream/type_mapper.js` - Type assignment logic
+- MODIFIED: `stream/importPipeline.js` - Pipeline integration
+- MODIFIED: `stream/venue_collector.js` - LevelDB persistence
+- MODIFIED: `stream/pass2_document_generator.js` - Restoration to addendum.osm
+
+**Rollout**:
+1. Build: `docker build -t tiskel/openstreetmap:v2.6.0 .`
+2. Re-import OSM data
+3. Verify: `curl "http://localhost:4000/v1/autocomplete?text=Psary" | jq '.features[0].properties.addendum.osm'`
+
+---
 
 ### v2.5.0 (2026-01-08)
 

@@ -412,6 +412,24 @@ function generateVenueDocument(venueData) {
       });
     }
     
+    // Restore type and type_name to addendum.osm
+    // These will be automatically exposed in API response
+    if (venueData.osm_type || venueData.osm_type_name_pl) {
+      // Get existing OSM addendum or create new one
+      const existingOsmAddendum = venueDoc.getAddendum('osm') || {};
+      
+      // Add type fields
+      if (venueData.osm_type) {
+        existingOsmAddendum.type = venueData.osm_type;
+      }
+      if (venueData.osm_type_name_pl) {
+        existingOsmAddendum.type_name = venueData.osm_type_name_pl;
+      }
+      
+      // Set back to document
+      venueDoc.setAddendum('osm', existingOsmAddendum);
+    }
+    
     return venueDoc;
     
   } catch (err) {
