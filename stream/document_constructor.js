@@ -49,6 +49,14 @@ module.exports = function(){
           const lat = (parseFloat(bounds.n) + parseFloat(bounds.s)) / 2;
           const lon = (parseFloat(bounds.e) + parseFloat(bounds.w)) / 2;
           doc.setCentroid({ lat, lon });
+          // DEBUG: Log when we calculate centroid from bounds
+          if( item.tags && item.tags.aeroway === 'aerodrome' ){
+            peliasLogger.info('[document_constructor] Calculated centroid from bounds for aerodrome: %s (%s)', 
+              item.tags.name || 'unnamed', uniqueId);
+            peliasLogger.info('[document_constructor]   bounds: n=%s s=%s e=%s w=%s', 
+              bounds.n, bounds.s, bounds.e, bounds.w);
+            peliasLogger.info('[document_constructor]   centroid: lat=%s lon=%s', lat, lon);
+          }
         }
       }
 
