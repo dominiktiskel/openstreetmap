@@ -452,16 +452,61 @@ else if( _.isPlainObject(item.bounds) ){
 - Before: `curl "http://localhost:4000/v1/autocomplete?text=Lotnisko%20Mirosławice"` → no results
 - After: Returns `way/86218932` with centroid calculated from bounds
 
+**Additional Changes in v2.6.3**:
+
+**1. Added `aeroway` to type_mapper priority keys**
+
+Previously, POIs with `aeroway` tags (aerodrome, heliport, helipad, terminal) were not getting type mappings because `'aeroway'` was missing from the `priorityKeys` array in `stream/type_mapper.js`.
+
+**Fix**: Added `'aeroway'` as the first priority key:
+```javascript
+const priorityKeys = [
+  'aeroway',  // NEW - highest priority for airports
+  'amenity',
+  'highway', 
+  'public_transport',
+  'shop',
+  'tourism',
+  'leisure',
+  'building'
+];
+```
+
+**Result**: Aerodromes now get `type: "aerodrome"`, `type_name: "Lotnisko"` in `addendum.osm`.
+
+**2. Fallback for unmapped POI types**
+
+Previously, POIs with OSM tags but no specific mapping in `config/type_map.js` had no type information at all in API results.
+
+**Fix**: Added fallback in `stream/type_mapper.js`:
+```javascript
+// CUSTOM: Fallback for unmapped types
+if (!typeData) {
+  for (const osmKey of priorityKeys) {
+    if (tags[osmKey]) {
+      typeData = {
+        type: 'other',
+        type_name_pl: 'Pozostałe',
+        type_aliases_pl: []
+      };
+      break;
+    }
+  }
+}
+```
+
+**Result**: All POIs now have type information. Unmapped types show as `type: "other"`, `type_name: "Pozostałe"`.
+
 **Files Changed**:
 - MODIFIED: `stream/document_constructor.js` - Add centroid fallback from bounds
+- MODIFIED: `stream/type_mapper.js` - Add aeroway priority + fallback for unmapped types
+- MODIFIED: `config/type_map.js` - Add aeroway type mappings (aerodrome, heliport, helipad, terminal)
 - MODIFIED: `MODIFICATIONS.md` - v2.6.3 changelog
 
 **Rollout**:
 1. Build: `docker build -t tiskel/openstreetmap:v2.6.3 .`
 2. Re-import OSM data
-3. Verify: `curl "http://localhost:4000/v1/autocomplete?text=Lotnisko%20Mirosławice"` (should now return results)
-
-**Related**: Also added `aeroway` type mappings in v2.6.3 for proper display of airport/heliport type names.
+3. Verify: `curl "http://localhost:4000/v1/autocomplete?text=Lotnisko%20Mirosławice"` (should now return results with type info)
 
 ----
 
