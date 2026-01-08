@@ -458,15 +458,17 @@ Pass 2: LevelDB [streets | venues | localities] → pass2_document_generator →
    - Cleanup for localities DB after successful import
 
 7. **Modified: `popularity_mapper.js`**:
-   - Added `'locality'` to supported layers
-   - Localities receive **high base popularity: 10,000** (more important than POI venues)
-   - Population-based boost from OSM `population` tag:
-     - Cities > 100k: score 50,000
-     - Cities > 50k: score 30,000
-     - Towns > 10k: score 20,000
-     - Large villages > 1k: score 15,000
-     - Small villages: score 10,000
-   - **Result**: Localities rank higher than POI venues in search results
+   - Added `'locality'` and `'street'` to supported layers
+   - **Ranking hierarchy** (highest to lowest):
+     1. **Localities**: base 10,000-50,000 (population-based)
+        - Cities > 100k: score 50,000
+        - Cities > 50k: score 30,000
+        - Towns > 10k: score 20,000
+        - Large villages > 1k: score 15,000
+        - Small villages: score 10,000
+     2. **Streets**: base 5,000 (important for navigation)
+     3. **Venues/POI**: 0-2,000 (depends on tags, default behavior)
+   - **Result**: Proper ranking in API results: `locality → street → venue`
 
 **Detection Logic Examples**:
 

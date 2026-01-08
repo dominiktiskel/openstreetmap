@@ -20,12 +20,12 @@ module.exports = function(){
 
     try {
 
-      // only map venues, addresses, and localities
-      if( !['venue', 'address', 'locality'].includes(doc.getLayer()) ){
+      // only map venues, addresses, localities, and streets
+      if( !['venue', 'address', 'locality', 'street'].includes(doc.getLayer()) ){
         return next(null, doc);
       }
       
-      // localities get high base popularity (they are important places)
+      // localities get highest base popularity (most important)
       if( doc.getLayer() === 'locality' ){
         let popularity = 10000; // High base score for localities
         
@@ -39,6 +39,17 @@ module.exports = function(){
           else if( pop > 1000 ) popularity = 15000;   // Large village
           // else: default 10000 for small villages
         }
+        
+        doc.setPopularity(popularity);
+        return next(null, doc);
+      }
+      
+      // streets get medium-high popularity (important for navigation)
+      if( doc.getLayer() === 'street' ){
+        let popularity = 5000; // Medium-high base score for streets
+        
+        // Streets are more important than venues but less than localities
+        // This ensures proper ranking: locality > street > venue
         
         doc.setPopularity(popularity);
         return next(null, doc);
