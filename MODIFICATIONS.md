@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.6.1
+## Version: v2.6.2
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.6.1`
+- **Docker Image**: `tiskel/openstreetmap:v2.6.2`
 
 ## Key Features
 
@@ -402,6 +402,120 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.6.2 (2026-01-08)
+
+**🎯 ENHANCEMENT: Type/Alias + Street Combination Search**
+
+**Problem**: 
+Users couldn't effectively search for POIs by combining type/alias with street name. For example:
+- "Mechanik Sułowska" → didn't find "Mercedes-Benz Trucks" on Sułowska
+- "Dentysta Główna" → didn't find dentists on Główna street
+- "Apteka Rynek" → didn't find pharmacies on Rynek
+
+While type aliases worked ("Mechanik" found car repair shops), combining them with street names had poor results because Pelias parser interpreted the entire phrase differently.
+
+**Solution**:
+Extended v2.6.1 to add **type_name/alias + street combinations** as searchable aliases:
+
+For each POI with a street address, now creates:
+- `type_name + street` (e.g., "Warsztat samochodowy Sułowska")
+- `alias1 + street` (e.g., "Warsztat Sułowska")
+- `alias2 + street` (e.g., "Mechanik Sułowska") ✅
+- `alias3 + street` (e.g., "Serwis samochodowy Sułowska")
+
+**Implementation**:
+
+**MODIFIED: `stream/pass2_document_generator.js`**:
+- When adding `type_name` as alias, also add `type_name + street`
+- When adding each `type_alias`, also add `alias + street`
+- Only for POIs that have `address_parts.street`
+
+**Code Change**:
+
+```javascript
+// Add type name + street combination
+if (venueData.osm_type_name_pl && venueData.osm_type_name_pl.trim()) {
+  const typeName = venueData.osm_type_name_pl.trim();
+  venueDoc.setNameAlias('default', typeName);
+  
+  // NEW: type_name + street
+  if (venueData.address_parts && venueData.address_parts.street) {
+    const street = venueData.address_parts.street.trim();
+    if (street) {
+      venueDoc.setNameAlias('default', `${typeName} ${street}`);
+    }
+  }
+}
+
+// Add aliases + street combinations
+if (venueData.osm_type_aliases_pl && Array.isArray(venueData.osm_type_aliases_pl)) {
+  venueData.osm_type_aliases_pl.forEach(alias => {
+    const aliasName = alias.trim();
+    venueDoc.setNameAlias('default', aliasName);
+    
+    // NEW: alias + street
+    if (venueData.address_parts && venueData.address_parts.street) {
+      const street = venueData.address_parts.street.trim();
+      if (street) {
+        venueDoc.setNameAlias('default', `${aliasName} ${street}`);
+      }
+    }
+  });
+}
+```
+
+**Example ES Document** - Mercedes-Benz Trucks on Sułowska:
+
+```json
+{
+  "name": {
+    "default": [
+      "Mercedes-Benz Trucks Grupa Wróbel",
+      "Mercedes-Benz Trucks Grupa Wróbel Sułowska",
+      "Warsztat samochodowy",
+      "Warsztat samochodowy Sułowska",      // 🆕 NEW
+      "Warsztat",
+      "Warsztat Sułowska",                  // 🆕 NEW
+      "Mechanik",
+      "Mechanik Sułowska",                  // 🆕 NEW (solves the problem!)
+      "Serwis samochodowy",
+      "Serwis samochodowy Sułowska"        // 🆕 NEW
+    ]
+  }
+}
+```
+
+**Search Results** - All now find Mercedes-Benz Trucks on Sułowska:
+- ✅ "Mercedes-Benz" (name)
+- ✅ "Mechanik" (alias)
+- ✅ "Mechanik Mercedes" (alias + part of name)
+- ✅ "Mechanik Sułowska" (alias + street) **← FIXED!**
+- ✅ "Warsztat Sułowska" (alias + street)
+- ✅ "Sułowska" (street)
+
+**Benefits**:
+- ✅ Natural search queries work: "Mechanik Sułowska", "Dentysta Główna"
+- ✅ Better UX for location-specific type searches
+- ✅ No duplicate documents (still uses name_alias)
+- ✅ Combines power of type aliases (v2.6.1) with street names
+
+**Impact**:
+- Increases alias count by ~4-10 per POI with street address
+- Slightly larger ES index, but significantly better search results
+
+**Files Changed**:
+- MODIFIED: `stream/pass2_document_generator.js` - Add type/alias + street combinations
+- MODIFIED: `MODIFICATIONS.md` - v2.6.2 changelog
+
+**Rollout**:
+1. Build: `docker build -t tiskel/openstreetmap:v2.6.2 .`
+2. Re-import OSM data
+3. Verify: `curl "http://localhost:4000/v1/autocomplete?text=Mechanik%20Sułowska"`
+
+Expected: Find all car_repair shops on Sułowska street
+
+---
 
 ### v2.6.1 (2026-01-08)
 

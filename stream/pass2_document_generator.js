@@ -374,14 +374,32 @@ function generateVenueDocument(venueData) {
     
     // Add type name as name alias (e.g., "Gabinet stomatologiczny")
     if (venueData.osm_type_name_pl && venueData.osm_type_name_pl.trim()) {
-      venueDoc.setNameAlias('default', venueData.osm_type_name_pl.trim());
+      const typeName = venueData.osm_type_name_pl.trim();
+      venueDoc.setNameAlias('default', typeName);
+      
+      // Also add type_name + street combination (e.g., "Gabinet stomatologiczny Główna")
+      if (venueData.address_parts && venueData.address_parts.street) {
+        const street = venueData.address_parts.street.trim();
+        if (street) {
+          venueDoc.setNameAlias('default', `${typeName} ${street}`);
+        }
+      }
     }
     
     // Add all type aliases as name aliases (e.g., "Dentysta", "Stomatolog")
     if (venueData.osm_type_aliases_pl && Array.isArray(venueData.osm_type_aliases_pl)) {
       venueData.osm_type_aliases_pl.forEach(alias => {
         if (alias && alias.trim()) {
-          venueDoc.setNameAlias('default', alias.trim());
+          const aliasName = alias.trim();
+          venueDoc.setNameAlias('default', aliasName);
+          
+          // Also add alias + street combination (e.g., "Dentysta Główna", "Mechanik Sułowska")
+          if (venueData.address_parts && venueData.address_parts.street) {
+            const street = venueData.address_parts.street.trim();
+            if (street) {
+              venueDoc.setNameAlias('default', `${aliasName} ${street}`);
+            }
+          }
         }
       });
     }
