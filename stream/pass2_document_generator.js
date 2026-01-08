@@ -1,7 +1,7 @@
 /**
  * Pass 2 Document Generator
  * 
- * Reads data from TWO separate LevelDB databases and generates documents for Elasticsearch.
+ * Reads data from THREE separate LevelDB databases and generates documents for Elasticsearch.
  * No WOF lookup needed - all hierarchy is already in LevelDB from Pass 1!
  * 
  * Databases:
@@ -15,17 +15,22 @@
  *    - Individual venue/POI documents
  *    - Full admin hierarchy from venueData.parent
  * 
+ * 3. Localities DB (pelias-localities):
+ *    - Individual locality documents (cities, towns, villages)
+ *    - Full admin hierarchy from localityData.parent
+ * 
  * Generated document types:
  * - Streets: layer='street' with house_numbers in addendum
  * - Addresses: layer='address' for specific house numbers (e.g., "Szkutnicza 10")
  * - Venues/POI: layer='venue' for points of interest
+ * - Localities: layer='locality' for cities, towns, villages
  * 
  * Using separate databases prevents LEVEL_LOCKED errors from concurrent access!
  * 
  * This is the ONLY place where Elasticsearch client is created,
  * completely eliminating ES client reuse issues!
  * 
- * @version 2.0.0
+ * @version 2.4.0
  */
 
 const through = require('through2');
@@ -43,6 +48,7 @@ const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateH
 const IMPORT_STREETS = _.get(peliasConfig, 'imports.openstreetmap.importStreets', true);
 const STREETS_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation-v2');
 const VENUES_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-venues-v2');
+const LOCALITIES_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-localities');
 
 module.exports = function() {
   let enabled = ENABLE_AGGREGATION && IMPORT_STREETS;
@@ -64,8 +70,9 @@ module.exports = function() {
       // Check if databases exist
       const streetsExist = fs.existsSync(STREETS_DB_PATH);
       const venuesExist = fs.existsSync(VENUES_DB_PATH);
+      const localitiesExist = fs.existsSync(LOCALITIES_DB_PATH);
       
-      if (!streetsExist && !venuesExist) {
+      if (!streetsExist && !venuesExist && !localitiesExist) {
         peliasLogger.warn('[pass2_document_generator] No LevelDB found - skipping');
         return done();
       }
@@ -74,11 +81,13 @@ module.exports = function() {
       peliasLogger.info('[pass2_document_generator] Generating documents from LevelDB');
       peliasLogger.info('[pass2_document_generator] Streets DB: %s', streetsExist ? 'found' : 'not found');
       peliasLogger.info('[pass2_document_generator] Venues DB: %s', venuesExist ? 'found' : 'not found');
+      peliasLogger.info('[pass2_document_generator] Localities DB: %s', localitiesExist ? 'found' : 'not found');
       peliasLogger.info('[pass2_document_generator] ========================================');
       
       const self = this;
       let venuesGenerated = 0;
-      let addressesGenerated = 0;  // NEW: Track address documents
+      let addressesGenerated = 0;  // Track address documents
+      let localitiesGenerated = 0;  // Track locality documents
       
       // Async iteration through BOTH LevelDB databases
       (async () => {
@@ -108,7 +117,32 @@ module.exports = function() {
             peliasLogger.info('[pass2_document_generator] Venues complete: %d documents', venuesGenerated);
           }
           
-          // SECOND: Generate street documents from streets DB
+          // SECOND: Generate locality documents from localities DB
+          if (localitiesExist) {
+            const localitiesDb = new Level(LOCALITIES_DB_PATH, { valueEncoding: 'json' });
+            await localitiesDb.open();
+            
+            for await (const [key, localityData] of localitiesDb.iterator()) {
+              try {
+                const localityDoc = generateLocalityDocument(localityData);
+                if (localityDoc) {
+                  self.push(localityDoc);
+                  localitiesGenerated++;
+                  
+                  if (localitiesGenerated % 100 === 0) {
+                    peliasLogger.info('[pass2_document_generator] Generated %d localities', localitiesGenerated);
+                  }
+                }
+              } catch (err) {
+                peliasLogger.error('[pass2_document_generator] Error processing locality "%s": %s', key, err.message);
+              }
+            }
+            
+            await localitiesDb.close();
+            peliasLogger.info('[pass2_document_generator] Localities complete: %d documents', localitiesGenerated);
+          }
+          
+          // THIRD: Generate street documents from streets DB
           if (streetsExist) {
             const streetsDb = new Level(STREETS_DB_PATH, { valueEncoding: 'json' });
             await streetsDb.open();
@@ -271,14 +305,15 @@ module.exports = function() {
           peliasLogger.info('[pass2_document_generator] ========================================');
           peliasLogger.info(
             '[pass2_document_generator] Complete: %d total documents',
-            streetsGenerated + addressesGenerated + venuesGenerated
+            streetsGenerated + addressesGenerated + venuesGenerated + localitiesGenerated
           );
           peliasLogger.info('[pass2_document_generator]   - %d streets', streetsGenerated);
           peliasLogger.info('[pass2_document_generator]   - %d addresses', addressesGenerated);
           peliasLogger.info('[pass2_document_generator]   - %d venues/POI', venuesGenerated);
+          peliasLogger.info('[pass2_document_generator]   - %d localities', localitiesGenerated);
           peliasLogger.info('[pass2_document_generator] ========================================');
           
-          // Clean up BOTH LevelDB databases after successful generation
+          // Clean up ALL LevelDB databases after successful generation
           peliasLogger.info('[pass2_document_generator] Cleaning up LevelDB databases');
           try {
             if (fs.existsSync(STREETS_DB_PATH)) {
@@ -288,6 +323,10 @@ module.exports = function() {
             if (fs.existsSync(VENUES_DB_PATH)) {
               fs.rmSync(VENUES_DB_PATH, { recursive: true, force: true });
               peliasLogger.info('[pass2_document_generator] Venues DB cleaned up');
+            }
+            if (fs.existsSync(LOCALITIES_DB_PATH)) {
+              fs.rmSync(LOCALITIES_DB_PATH, { recursive: true, force: true });
+              peliasLogger.info('[pass2_document_generator] Localities DB cleaned up');
             }
           } catch (err) {
             peliasLogger.warn('[pass2_document_generator] Failed to clean up LevelDB: %s', err.message);
@@ -370,6 +409,63 @@ function generateVenueDocument(venueData) {
     
   } catch (err) {
     peliasLogger.error('[pass2_document_generator] Error generating venue document:', err);
+    return null;
+  }
+}
+
+/**
+ * Generate a locality document from LevelDB data
+ */
+function generateLocalityDocument(localityData) {
+  try {
+    // Validate locality data
+    if (!localityData || !localityData.id) {
+      return null;
+    }
+    
+    if (!localityData.lat || !localityData.lon) {
+      peliasLogger.debug('[pass2_document_generator] Skipping locality (no coordinates): %s', localityData.id);
+      return null;
+    }
+    
+    // Create locality document (always layer='locality')
+    const localityDoc = new Document('openstreetmap', 'locality', localityData.id)
+      .setCentroid({ lat: localityData.lat, lon: localityData.lon });
+    
+    // Add name if available
+    if (localityData.name && localityData.name.trim()) {
+      localityDoc.setName('default', localityData.name.trim());
+    }
+    
+    // Copy admin hierarchy from locality data (already from WOF in Pass 1!)
+    if (localityData.parent) {
+      // For localities, we don't want to add 'locality' level from parent
+      // as the locality itself IS the locality
+      const hierarchyLevels = ['localadmin', 'county', 'borough', 'region', 'country'];
+      
+      for (const placetype of hierarchyLevels) {
+        if (localityData.parent[placetype] && localityData.parent[placetype].trim()) {
+          const name = localityData.parent[placetype].trim();
+          const osmId = 'osm:' + placetype + ':' + name.toLowerCase().replace(/\s+/g, '_');
+          localityDoc.addParent(placetype, name, osmId, undefined);
+        }
+      }
+    }
+    
+    // Add OSM admin data if available
+    if (localityData.osmAdmin) {
+      for (const [level, name] of Object.entries(localityData.osmAdmin)) {
+        if (name && name.trim()) {
+          const osmId = 'osm:' + level + ':' + name.toLowerCase().replace(/\s+/g, '_');
+          localityDoc.addParent(level, name.trim(), osmId, 'osm');
+        }
+      }
+    }
+    
+    return localityDoc;
+    
+  } catch (err) {
+    peliasLogger.error('[pass2_document_generator] Error generating locality document:', err);
     return null;
   }
 }

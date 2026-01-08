@@ -34,6 +34,7 @@ streams.tagMapper = require('./tag_mapper');
 streams.addressesWithoutStreet = require('./addresses_without_street');
 streams.adminLookup = require('pelias-wof-admin-lookup').create;
 streams.addressExtractor = require('./address_extractor');
+streams.localityExtractor = require('./locality_extractor');
 streams.houseNumbersCollector = require('./house_numbers_collector');
 streams.documentSplitter = require('./document_splitter');
 streams.pass2DocumentGenerator = require('./pass2_document_generator');
@@ -61,6 +62,7 @@ streams.importPass1 = function(callback){
     .pipe( streams.addressesWithoutStreet() )
     .pipe( streams.tagMapper() )
     .pipe( streams.addressExtractor() )
+    .pipe( streams.localityExtractor() )
     .pipe( streams.blacklistStream() )
     .pipe( streams.categoryMapper( categoryDefaults ) )
     .pipe( streams.addendumMapper() )
@@ -73,7 +75,7 @@ streams.importPass1 = function(callback){
       // This prevents LEVEL_LOCKED errors when Pass 2 tries to open the same DBs
       setTimeout(() => {
         peliasLogger.info('[importPipeline] Starting Pass 2...');
-        callback();
+      callback();
       }, 2000);
     })
     .on('error', function(err) {

@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.2.3
+## Version: v2.4.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.3.0`
+- **Docker Image**: `tiskel/openstreetmap:v2.4.0`
 
 ## Key Features
 
@@ -402,6 +402,111 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.4.0 (2026-01-08)
+
+**🌍 FEATURE: OSM Localities as Separate Layer**
+
+**Problem**: 
+OSM features with `place=city/town/village` tags were imported as `venue` layer, making them indistinguishable from regular POIs (shops, restaurants). This made it impossible to search for localities specifically (e.g., `/v1/search?layers=locality`) and created confusion between actual localities and POI venues.
+
+**Solution**:
+Implemented dedicated support for OSM localities with separate LevelDB database and proper layer classification. Localities are now detected in Pass 1, stored separately, and imported as `layer=locality` in Pass 2.
+
+**Architecture**:
+
+```
+Pass 1: OSM → locality_extractor → document_splitter → [streets | venues | localities] → LevelDB
+Pass 2: LevelDB [streets | venues | localities] → pass2_document_generator → Elasticsearch
+```
+
+**Implementation**:
+
+1. **Modified: `config/features.js` (Parser configuration)**:
+   - Added `place~city+name`, `place~town+name`, `place~village+name`, `place~hamlet+name` to `venue_tags`
+   - **CRITICAL**: Without these tags, parser skips locality nodes entirely
+   - Parser (pbf2json) only imports features matching configured tags
+   - This is the root cause why localities weren't imported before
+
+2. **New: `locality_extractor.js` (Pass 1 stream)**:
+   - Detects OSM locality features by tags
+   - Changes document layer from `'venue'` to `'locality'`
+   - **PRIMARY detection**: `place=city`, `place=town`, `place=village`, `place=hamlet`
+   - **SECONDARY detection**: `boundary=administrative` + `admin_level=6,7,8` (for Polish cities with county rights)
+   - Requires named features (`doc.getName('default')` must exist)
+
+3. **New: `locality_collector.js` (Pass 1 collector)**:
+   - Stores localities to dedicated LevelDB: `pelias-localities`
+   - Key format: `locality|{id}` (e.g., `locality|node:123456`)
+   - Saves full WOF parent hierarchy and OSM admin data
+   - **Simpler than venue_collector**: no alternative names, no address_parts, no name_with_street
+
+4. **Modified: `document_splitter.js`**:
+   - Added routing for `layer=locality` → `localityCollector`
+   - Three-way split: streets | localities | venues
+
+5. **Modified: `importPipeline.js`**:
+   - Added `locality_extractor` to Pass 1 pipeline (after `address_extractor`, before `blacklistStream`)
+   - Ensures localities are detected before WOF lookup and document splitting
+
+6. **Modified: `pass2_document_generator.js`**:
+   - Reads from three databases: streets, venues, **localities**
+   - Added `generateLocalityDocument()` function
+   - Generates documents with `layer=locality`
+   - Cleanup for localities DB after successful import
+
+**Detection Logic Examples**:
+
+| OSM Tags | Layer | Reason |
+|----------|-------|--------|
+| `place=city` | locality | Primary detection |
+| `place=town` | locality | Primary detection |
+| `place=village` | locality | Primary detection |
+| `boundary=administrative, admin_level=6` | locality | Secondary (city with county rights) |
+| `boundary=administrative, admin_level=8` | locality | Secondary (standard locality) |
+| `amenity=restaurant` | venue | Not a locality |
+
+**Result in Elasticsearch**:
+```json
+{
+  "layer": "locality",
+  "name": {
+    "default": "Krzyżanowice"
+  },
+  "parent": {
+    "county": ["Kłodzko"],
+    "region": ["dolnośląskie"],
+    "country": ["Polska"]
+  },
+  "source": "openstreetmap"
+}
+```
+
+**User Experience**:
+- ✅ Search for localities: `/v1/search?text=Wrocław&layers=locality`
+- ✅ Proper layer classification in results
+- ✅ No confusion between localities and POI venues
+- ✅ Full WOF hierarchy preserved from Pass 1
+- ✅ No duplicate documents (each feature goes to exactly one collector)
+
+**Benefits**:
+- Clean separation between localities and venues/POI
+- Dedicated LevelDB database for better organization
+- Proper layer filtering in Pelias API
+- No impact on existing venue/POI functionality
+- Scalable architecture (tested with Polish OSM data)
+
+**Files Modified**:
+- `config/features.js` - Added place tags for parser to import localities
+- `stream/importPipeline.js` - Added locality_extractor to pipeline
+- `stream/document_splitter.js` - Added routing for localities
+- `stream/pass2_document_generator.js` - Added localities DB reading
+
+**Files Added**:
+- `stream/locality_extractor.js` - Stream for detecting localities
+- `stream/locality_collector.js` - Collector for storing localities to LevelDB
+
+---
 
 ### v2.3.0 (2026-01-05)
 
