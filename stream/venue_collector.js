@@ -115,18 +115,7 @@ module.exports = function() {
         const tags = doc.getMeta('tags');
         
         if (!centroid || !centroid.lat || !centroid.lon) {
-          // DEBUG: Log when we skip documents without centroid
-          if( tags && tags.aeroway === 'aerodrome' ){
-            peliasLogger.warn('[venue_collector] SKIPPING aerodrome without centroid: %s (%s)', 
-              tags.name || 'unnamed', doc.getId());
-          }
           return next(); // Skip documents without valid coordinates
-        }
-        
-        // DEBUG: Log when we process aerodrome
-        if( tags && tags.aeroway === 'aerodrome' ){
-          peliasLogger.info('[venue_collector] Processing aerodrome: %s (%s) with centroid: lat=%s lon=%s', 
-            tags.name || 'unnamed', doc.getId(), centroid.lat, centroid.lon);
         }
         
         // Extract OSM tags for alternative names
