@@ -373,8 +373,8 @@ function generateVenueDocument(venueData) {
     }
     
     // Add type name as name alias (e.g., "Gabinet stomatologiczny")
-    if (venueData.osm_type_name_pl && venueData.osm_type_name_pl.trim()) {
-      const typeName = venueData.osm_type_name_pl.trim();
+    if (venueData.osm_type_name && venueData.osm_type_name.trim()) {
+      const typeName = venueData.osm_type_name.trim();
       venueDoc.setNameAlias('default', typeName);
       
       // Also add type_name + street combination (e.g., "Gabinet stomatologiczny Główna")
@@ -387,8 +387,8 @@ function generateVenueDocument(venueData) {
     }
     
     // Add all type aliases as name aliases (e.g., "Dentysta", "Stomatolog")
-    if (venueData.osm_type_aliases_pl && Array.isArray(venueData.osm_type_aliases_pl)) {
-      venueData.osm_type_aliases_pl.forEach(alias => {
+    if (venueData.osm_type_aliases && Array.isArray(venueData.osm_type_aliases)) {
+      venueData.osm_type_aliases.forEach(alias => {
         if (alias && alias.trim()) {
           const aliasName = alias.trim();
           venueDoc.setNameAlias('default', aliasName);
@@ -446,7 +446,7 @@ function generateVenueDocument(venueData) {
     
     // Restore type and type_name to addendum.osm
     // These will be automatically exposed in API response
-    if (venueData.osm_type || venueData.osm_type_name_pl) {
+    if (venueData.osm_type || venueData.osm_type_name) {
       // Get existing OSM addendum or create new one
       const existingOsmAddendum = venueDoc.getAddendum('osm') || {};
       
@@ -454,8 +454,8 @@ function generateVenueDocument(venueData) {
       if (venueData.osm_type) {
         existingOsmAddendum.type = venueData.osm_type;
       }
-      if (venueData.osm_type_name_pl) {
-        existingOsmAddendum.type_name = venueData.osm_type_name_pl;
+      if (venueData.osm_type_name) {
+        existingOsmAddendum.type_name = venueData.osm_type_name;
       }
       
       // Set back to document

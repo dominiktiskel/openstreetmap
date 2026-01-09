@@ -16,7 +16,6 @@
  */
 
 var categoryDefaults = require('../config/category_map');
-var typeDefaults = require('../config/type_map');
 var through = require('through2');
 var peliasLogger = require('pelias-logger').get('openstreetmap');
 var peliasConfig = require('pelias-config').generate();
@@ -66,11 +65,11 @@ streams.importPass1 = function(callback){
     .pipe( streams.addressExtractor() )
     .pipe( streams.localityExtractor() )
     .pipe( streams.blacklistStream() )
+    .pipe( streams.adminLookup() )  // WOF lookup in Pass 1! (BEFORE typeMapper)
     .pipe( streams.categoryMapper( categoryDefaults ) )
-    .pipe( streams.typeMapper( typeDefaults ) )
-    .pipe( streams.addendumMapper() )
     .pipe( streams.popularityMapper() )
-    .pipe( streams.adminLookup() )  // WOF lookup in Pass 1!
+    .pipe( streams.typeMapper() )  // Now runs AFTER adminLookup - can access country field
+    .pipe( streams.addendumMapper() )
     .pipe( streams.documentSplitter() )  // Split: LevelDB vs direct to Elasticsearch
     .on('finish', function() {
       peliasLogger.info('[importPipeline] Pass 1 complete, waiting for LevelDB to close...');

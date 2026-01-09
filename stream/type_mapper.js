@@ -1,6 +1,6 @@
 /**
  * Type Mapper - assigns POI type and type_name based on OSM tags
- * Similar to category_mapper but for single type assignment
+ * Multi-language support: selects appropriate language based on document country
  * 
  * Stores type information in document metadata for later persistence to LevelDB
  */
@@ -8,7 +8,23 @@
 const through = require('through2');
 const peliasLogger = require('pelias-logger').get('openstreetmap');
 
-module.exports = function(typeMapping) {
+// Load all type maps at module initialization (cached)
+const typeMaps = {
+  'pl': require('../config/type_map_pl'),
+  'en': require('../config/type_map_en')
+  // Add more languages as needed: 'de', 'fr', 'es', etc.
+};
+
+// Load country to language mapping
+const countryLanguageMap = require('../config/country_language_map');
+
+// Fallback type data for unmapped POI types (language-agnostic)
+const FALLBACK_TYPE_DATA = {
+  'pl': { type: 'other', type_name: 'Pozostałe', type_aliases: [] },
+  'en': { type: 'other', type_name: 'Other', type_aliases: [] }
+};
+
+module.exports = function() {
   return through.obj(function(doc, enc, next) {
     try {
       // Only map venues (not addresses, localities, streets)
@@ -20,6 +36,23 @@ module.exports = function(typeMapping) {
       const tags = doc.getMeta('tags');
       if (!tags) {
         return next(null, doc);
+      }
+
+      // Get country from document (populated by adminLookup)
+      // Note: adminLookup must run BEFORE typeMapper in the pipeline
+      const country = doc.parent && doc.parent.country && doc.parent.country[0];
+      
+      // Determine language code based on country
+      const languageCode = countryLanguageMap[country] || countryLanguageMap._default;
+      
+      // Select appropriate type mapping (fallback to English if not available)
+      const typeMapping = typeMaps[languageCode] || typeMaps.en;
+      
+      // Log language selection at debug level for verification
+      if (country) {
+        peliasLogger.debug('[type_mapper] Country: %s, Language: %s', country, languageCode);
+      } else {
+        peliasLogger.debug('[type_mapper] No country found, using default language: %s', languageCode);
       }
 
       // Find first matching type (priority order matters)
@@ -44,16 +77,12 @@ module.exports = function(typeMapping) {
         }
       }
 
-      // CUSTOM: Fallback for unmapped types - use generic "other" type with OSM tag info
+      // CUSTOM: Fallback for unmapped types - use generic "other" type with language-specific name
       if (!typeData) {
         // Find first OSM tag that could represent a type
         for (const osmKey of priorityKeys) {
           if (tags[osmKey]) {
-            typeData = {
-              type: 'other',
-              type_name_pl: 'Pozostałe',
-              type_aliases_pl: []
-            };
+            typeData = FALLBACK_TYPE_DATA[languageCode] || FALLBACK_TYPE_DATA.en;
             break;
           }
         }
@@ -63,11 +92,11 @@ module.exports = function(typeMapping) {
       // These will be saved to LevelDB by venue_collector and restored in Pass 2
       if (typeData) {
         doc.setMeta('osm_type', typeData.type);
-        doc.setMeta('osm_type_name_pl', typeData.type_name_pl);
+        doc.setMeta('osm_type_name', typeData.type_name);
         
         // Store type aliases if available
-        if (typeData.type_aliases_pl && Array.isArray(typeData.type_aliases_pl)) {
-          doc.setMeta('osm_type_aliases_pl', typeData.type_aliases_pl);
+        if (typeData.type_aliases && Array.isArray(typeData.type_aliases)) {
+          doc.setMeta('osm_type_aliases', typeData.type_aliases);
         }
       }
 

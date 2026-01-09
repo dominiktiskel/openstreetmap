@@ -161,18 +161,18 @@ module.exports = function() {
         
         // Copy type and type_name if available
         const osmType = doc.getMeta('osm_type');
-        const osmTypeName = doc.getMeta('osm_type_name_pl');
+        const osmTypeName = doc.getMeta('osm_type_name');
         if (osmType) {
           venueData.osm_type = osmType;
         }
         if (osmTypeName) {
-          venueData.osm_type_name_pl = osmTypeName;
+          venueData.osm_type_name = osmTypeName;
         }
         
         // Copy type aliases if available
-        const osmTypeAliases = doc.getMeta('osm_type_aliases_pl');
+        const osmTypeAliases = doc.getMeta('osm_type_aliases');
         if (osmTypeAliases && Array.isArray(osmTypeAliases)) {
-          venueData.osm_type_aliases_pl = osmTypeAliases;
+          venueData.osm_type_aliases = osmTypeAliases;
         }
         
         // Copy full parent hierarchy from WOF lookup
@@ -260,13 +260,13 @@ module.exports = function() {
           if (venueData.osm_type) {
             altVenueData.osm_type = venueData.osm_type;
           }
-          if (venueData.osm_type_name_pl) {
-            altVenueData.osm_type_name_pl = venueData.osm_type_name_pl;
+          if (venueData.osm_type_name) {
+            altVenueData.osm_type_name = venueData.osm_type_name;
           }
           
           // Copy type aliases (same as main venue)
-          if (venueData.osm_type_aliases_pl) {
-            altVenueData.osm_type_aliases_pl = venueData.osm_type_aliases_pl;
+          if (venueData.osm_type_aliases) {
+            altVenueData.osm_type_aliases = venueData.osm_type_aliases;
           }
           
           buffer.push({ key: altKey, value: altVenueData });

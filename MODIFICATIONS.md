@@ -2,14 +2,14 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.6.3
+## Version: v2.7.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.6.3`
+- **Docker Image**: `tiskel/openstreetmap:v2.7.0`
 
 ## Key Features
 
@@ -402,6 +402,204 @@ docker push tiskel/openstreetmap:v1.4.1
 - [dominiktiskel/pelias-docker-custom](https://github.com/dominiktiskel/pelias-docker-custom) - Docker configurations using this custom image
 
 ## Changelog
+
+### v2.7.0 (2026-01-09)
+
+**🌍 FEATURE: Multi-language Type Map Support**
+
+**Problem**: 
+POI type names were only available in Polish (`type_name_pl`, `type_aliases_pl`). This made the system unsuitable for international deployments or regions outside Poland. Users in different countries needed type names in their local languages (English, German, French, etc.).
+
+**Solution**:
+Implemented comprehensive multi-language support for POI type mappings:
+- Language selection based on document's country (from WOF admin lookup)
+- Extensible architecture supporting unlimited languages
+- English (EN) as default fallback for unmapped countries
+- All type maps loaded at startup and cached for performance
+
+**Architecture**:
+
+```
+Pass 1:
+OSM → adminLookup (populates country) → typeMapper (selects language) → LevelDB
+
+TypeMapper Logic:
+1. Get country from doc.parent.country[0]
+2. Map country to language code (e.g., "Polska" → "pl", "United States" → "en")
+3. Select appropriate type_map_{lang}.js
+4. Fallback to EN if language not available
+```
+
+**Key Changes**:
+
+**1. Language-Specific Type Maps**:
+- **NEW**: `config/type_map_pl.js` - Polish type names (renamed from `type_map.js`)
+- **NEW**: `config/type_map_en.js` - Full English translations (~150 POI types)
+- **NEW**: `config/country_language_map.js` - Country → language code mapping
+
+**Property Names Changed** (language-agnostic):
+```javascript
+// Before (v2.6.x):
+type_name_pl: 'Przystanek autobusowy'
+type_aliases_pl: ['Przystanek']
+
+// After (v2.7.0):
+type_name: 'Przystanek autobusowy'  // or 'Bus Stop' in EN
+type_aliases: ['Przystanek']         // or ['Stop', 'Transit Stop'] in EN
+```
+
+**2. Country-to-Language Mapping**:
+Supports 50+ countries with proper language codes:
+- Polish: Polska, Poland → `pl`
+- English: United States, United Kingdom, Canada, Australia, etc. → `en`
+- German: Germany, Austria, Switzerland → `de` (prepared for future)
+- French: France, Belgium, Monaco → `fr` (prepared for future)
+- Spanish: Spain, Mexico, Argentina, etc. → `es` (prepared for future)
+- And many more...
+
+**3. Pipeline Reordering**:
+**CRITICAL**: `typeMapper` must run AFTER `adminLookup` to access country field:
+
+```javascript
+// Before (v2.6.x):
+.pipe( streams.categoryMapper() )
+.pipe( streams.typeMapper() )       // No country available yet!
+.pipe( streams.adminLookup() )
+
+// After (v2.7.0):
+.pipe( streams.categoryMapper() )
+.pipe( streams.adminLookup() )      // Populates doc.parent.country
+.pipe( streams.typeMapper() )       // Can now select language!
+```
+
+**4. Dynamic Language Selection**:
+```javascript
+// stream/type_mapper.js
+const typeMaps = {
+  'pl': require('../config/type_map_pl'),
+  'en': require('../config/type_map_en')
+  // Easy to add more: 'de', 'fr', 'es', etc.
+};
+
+const country = doc.parent.country && doc.parent.country[0];
+const languageCode = countryLanguageMap[country] || countryLanguageMap['_default']; // 'en'
+const typeMapping = typeMaps[languageCode] || typeMaps['en'];
+```
+
+**Example Results**:
+
+**Polish POI (Polska)**:
+```json
+{
+  "name": "Psary – Parkowa",
+  "parent": { "country": ["Polska"] },
+  "addendum": {
+    "osm": {
+      "type": "bus_stop",
+      "type_name": "Przystanek autobusowy"
+    }
+  }
+}
+```
+
+**English POI (United States)**:
+```json
+{
+  "name": "Main Street Station",
+  "parent": { "country": ["United States"] },
+  "addendum": {
+    "osm": {
+      "type": "bus_stop",
+      "type_name": "Bus Stop"
+    }
+  }
+}
+```
+
+**Benefits**:
+- ✅ **International support**: POI types in local languages
+- ✅ **Automatic selection**: Based on WOF country data
+- ✅ **Easy expansion**: Add new languages by creating `type_map_{lang}.js`
+- ✅ **Performance**: All maps cached at startup
+- ✅ **Fallback**: English used for unmapped countries
+- ✅ **Extensible**: Architecture supports unlimited languages
+
+**Files Changed**:
+- **RENAMED**: `config/type_map.js` → `config/type_map_pl.js`
+- **NEW**: `config/type_map_en.js` - Full English translations
+- **NEW**: `config/country_language_map.js` - Country→language mapping
+- **MODIFIED**: `stream/type_mapper.js` - Multi-language support with caching
+- **MODIFIED**: `stream/importPipeline.js` - Reordered pipeline (adminLookup before typeMapper)
+- **MODIFIED**: `stream/venue_collector.js` - Updated metadata field names
+- **MODIFIED**: `stream/pass2_document_generator.js` - Updated metadata field names
+
+**Migration Guide**:
+
+This is a **BREAKING CHANGE** - metadata field names changed:
+
+**Option 1: Full Reimport (Recommended)**:
+```bash
+# Update docker-compose.yml:
+image: tiskel/openstreetmap:v2.7.0
+
+# Reimport:
+pelias compose pull openstreetmap
+pelias compose down
+pelias elastic drop
+pelias elastic create
+pelias import osm
+```
+
+**Option 2: Gradual Migration**:
+If full reimport is not possible, the system will work but existing documents will have old field names (`osm_type_name_pl`). New imports will use new field names (`osm_type_name`).
+
+**Adding New Languages**:
+
+1. Create `config/type_map_{lang}.js`:
+```javascript
+module.exports = {
+  'amenity': {
+    'bus_stop': {
+      type: 'bus_stop',
+      type_name: 'Bushaltestelle',        // German
+      type_aliases: ['Haltestelle']
+    }
+  }
+};
+```
+
+2. Add to `config/country_language_map.js`:
+```javascript
+'Germany': 'de',
+'Austria': 'de',
+'Switzerland': 'de'
+```
+
+3. Register in `stream/type_mapper.js`:
+```javascript
+const typeMaps = {
+  'pl': require('../config/type_map_pl'),
+  'en': require('../config/type_map_en'),
+  'de': require('../config/type_map_de')  // NEW
+};
+```
+
+**Future Enhancements**:
+- Easy to add German, French, Spanish, Czech, Slovak, etc.
+- Can use ISO 639-1 language codes for standardization
+- Could support region-specific variants (en-US vs en-GB)
+- Could load maps dynamically on-demand (for 100+ languages)
+
+**Testing**:
+```bash
+# Polish POI
+curl "http://localhost:4000/v1/autocomplete?text=Przystanek" | jq '.features[0].properties.addendum.osm'
+
+# English POI (if imported from US/UK data)
+curl "http://localhost:4000/v1/autocomplete?text=Bus%20Stop" | jq '.features[0].properties.addendum.osm'
+```
+
+---
 
 ### v2.6.3 (2026-01-08)
 
