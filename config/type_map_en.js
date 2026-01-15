@@ -241,6 +241,14 @@ module.exports = {
     'mosque':             { type: 'mosque', type_name: 'Mosque', type_aliases: ['Islamic Center'] },
     'temple':             { type: 'temple', type_name: 'Temple', type_aliases: ['Place of Worship'] },
     'synagogue':          { type: 'synagogue', type_name: 'Synagogue', type_aliases: ['Jewish Temple'] },
-    'shrine':             { type: 'shrine', type_name: 'Shrine', type_aliases: ['Sacred Site'] }
+    'shrine':             { type: 'shrine', type_name: 'Shrine', type_aliases: ['Sacred Site'] },
+    
+    // Transportation
+    'train_station':      { type: 'train_station', type_name: 'Train Station', type_aliases: ['Railway Station', 'Station'] },
+    'transportation':     { type: 'transportation', type_name: 'Transportation Station', type_aliases: ['Transit Station', 'Station'] }
+  },
+  
+  'railway': {
+    'station':            { type: 'railway_station', type_name: 'Railway Station', type_aliases: ['Train Station', 'Station'] }
   }
 };

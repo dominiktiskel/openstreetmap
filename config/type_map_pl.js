@@ -196,7 +196,7 @@ module.exports = {
   
   'public_transport': {
     'platform':           { type: 'platform', type_name: 'Peron', type_aliases: [] },
-    'station':            { type: 'station', type_name: 'Stacja', type_aliases: ['Dworzec'] },
+    'station':            { type: 'station', type_name: 'Dworzec', type_aliases: ['Stacja'] },
     'stop_position':      { type: 'stop_position', type_name: 'Pozycja przystanku', type_aliases: [] }
   },
   
@@ -277,6 +277,14 @@ module.exports = {
     'mosque':             { type: 'mosque', type_name: 'Meczet', type_aliases: [] },
     'temple':             { type: 'temple', type_name: 'Świątynia', type_aliases: [] },
     'synagogue':          { type: 'synagogue', type_name: 'Synagoga', type_aliases: [] },
-    'shrine':             { type: 'shrine', type_name: 'Kapliczka', type_aliases: [] }
+    'shrine':             { type: 'shrine', type_name: 'Kapliczka', type_aliases: [] },
+    
+    // Transportation
+    'train_station':      { type: 'train_station', type_name: 'Dworzec kolejowy', type_aliases: ['Dworzec', 'Stacja kolejowa'] },
+    'transportation':     { type: 'transportation', type_name: 'Dworzec', type_aliases: ['Stacja', 'Węzeł komunikacyjny'] }
+  },
+  
+  'railway': {
+    'station':            { type: 'railway_station', type_name: 'Stacja kolejowa', type_aliases: ['Dworzec', 'Stacja'] }
   }
 };
