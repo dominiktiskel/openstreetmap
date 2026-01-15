@@ -60,6 +60,12 @@ const mapping = {
     museum: { _score: 2000 },
     theme_park: { _score: 2000 },
     zoo: { _score: 2000 },
+    hotel: { _score: 2000 },
+    motel: { _score: 1000 },
+    guest_house: { _score: 1000 },
+    hostel: { _score: 1000 },
+    apartment: { _score: 1000 },
+    chalet: { _score: 1000 },
     _score: 1000
   },
   museum: { _score: 2000 },
@@ -108,7 +114,7 @@ const mapping = {
     nightclub: { _score: 1000 },
     planetarium: { _score: 1000 },
     social_centre: { _score: 1000 },
-    theatre: { _score: 1000 },
+    theatre: { _score: 5000 },
     courthouse: { _score: 1000 },
     coworking_space: { _score: 1000 },
     dojo: { _score: 1000 },
@@ -121,7 +127,15 @@ const mapping = {
     post_office: { _score: 1000 },
     prison: { _score: 1000 },
     public_bath: { _score: 1000 },
-    townhall: { _score: 1000 }
+    townhall: { _score: 1000 },
+    bar: { _score: 1000 },
+    pub: { _score: 1000 },
+    restaurant: { _score: 1000 },
+    cafe: { _score: 1000 },
+    fast_food: { _score: 1000 },
+    food_court: { _score: 1000 },
+    ice_cream: { _score: 1000 },
+    biergarten: { _score: 1000 }
   },
 
   // transportation
@@ -136,10 +150,17 @@ const mapping = {
   railway: {
     station: { _score: 2000 },
     subway_entrance: { _score: 2000 },
+    platform: { _score: 50 },
   },
   public_transport: {
-    station: { _score: 2000 }
-    // no scoring boost for `public_transport:*`, as many unimportant records have other tags
+    station: { _score: 2000 },
+    platform: { _score: 50 },
+    stop_position: { _score: 50 },
+    // public transport platforms and stops get low scores
+  },
+  highway: {
+    bus_stop: { _score: 50 },
+    platform: { _score: 50 },
   },
 
   // contact information
