@@ -135,7 +135,113 @@ const mapping = {
     fast_food: { _score: 1000 },
     food_court: { _score: 1000 },
     ice_cream: { _score: 1000 },
-    biergarten: { _score: 1000 }
+    biergarten: { _score: 1000 },
+    cinema: { _score: 1000 },
+    gym: { _score: 1000 },
+    casino: { _score: 1000 },
+    gambling: { _score: 1000 },
+    kindergarten: { _score: 1000 },
+    bbq: { _score: 500 },
+    parking: { _score: 100 },
+    parking_space: { _score: 100 },
+    bicycle_parking: { _score: 100 },
+    motorcycle_parking: { _score: 100 },
+    toilets: { _score: 100 },
+    drinking_water: { _score: 100 },
+    atm: { _score: 200 },
+    post_box: { _score: 100 },
+    vending_machine: { _score: 100 },
+    telephone: { _score: 100 },
+    recycling: { _score: 100 },
+    waste_disposal: { _score: 100 }
+  },
+
+  // retail shops
+  shop: {
+    mall: { _score: 2000 },
+    department_store: { _score: 2000 },
+    supermarket: { _score: 2000 },
+    convenience: { _score: 1000 },
+    bakery: { _score: 1000 },
+    butcher: { _score: 1000 },
+    greengrocer: { _score: 1000 },
+    seafood: { _score: 1000 },
+    deli: { _score: 1000 },
+    beverages: { _score: 1000 },
+    alcohol: { _score: 1000 },
+    clothes: { _score: 1000 },
+    shoes: { _score: 1000 },
+    hairdresser: { _score: 1000 },
+    beauty: { _score: 1000 },
+    jewelry: { _score: 1000 },
+    books: { _score: 1000 },
+    florist: { _score: 1000 },
+    furniture: { _score: 1000 },
+    electronics: { _score: 1000 },
+    computer: { _score: 1000 },
+    mobile_phone: { _score: 1000 },
+    gift: { _score: 1000 },
+    toys: { _score: 1000 },
+    sports: { _score: 1000 },
+    bicycle: { _score: 1000 },
+    car: { _score: 1000 },
+    car_parts: { _score: 1000 },
+    car_repair: { _score: 1000 },
+    pet: { _score: 1000 },
+    kiosk: { _score: 1000 },
+    chemist: { _score: 1000 },
+    medical_supply: { _score: 1000 },
+    optician: { _score: 1000 },
+    _score: 1000
+  },
+
+  // leisure and recreation
+  leisure: {
+    stadium: { _score: 2000 },
+    water_park: { _score: 2000 },
+    theme_park: { _score: 2000 },
+    sports_centre: { _score: 1000 },
+    swimming_pool: { _score: 1000 },
+    fitness_centre: { _score: 1000 },
+    park: { _score: 1000 },
+    playground: { _score: 1000 },
+    garden: { _score: 1000 },
+    golf_course: { _score: 1000 },
+    miniature_golf: { _score: 1000 },
+    ice_rink: { _score: 1000 },
+    pitch: { _score: 500 },
+    track: { _score: 500 },
+    dog_park: { _score: 500 },
+    nature_reserve: { _score: 500 },
+    fishing: { _score: 500 },
+    amusement_arcade: { _score: 500 },
+    bandstand: { _score: 500 },
+    beach_resort: { _score: 1000 },
+    _score: 500
+  },
+
+  // sports facilities
+  sport: {
+    _score: 500
+  },
+
+  // offices
+  office: {
+    _score: 1000
+  },
+
+  // craft workshops
+  craft: {
+    _score: 1000
+  },
+
+  // natural features
+  natural: {
+    beach: { _score: 500 },
+    water: { _score: 300 },
+    wood: { _score: 200 },
+    glacier: { _score: 300 },
+    _score: 200
   },
 
   // transportation
