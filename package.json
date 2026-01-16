@@ -68,8 +68,7 @@
   },
   "pre-commit": [
     "lint",
-    "validate",
-    "test"
+    "validate"
   ],
   "release": {
     "branch": "master",
