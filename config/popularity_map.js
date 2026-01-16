@@ -114,7 +114,7 @@ const mapping = {
     nightclub: { _score: 1000 },
     planetarium: { _score: 1000 },
     social_centre: { _score: 1000 },
-    theatre: { _score: 5000 },
+    theatre: { _score: 2000 },
     courthouse: { _score: 1000 },
     coworking_space: { _score: 1000 },
     dojo: { _score: 1000 },
