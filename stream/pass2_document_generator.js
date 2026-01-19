@@ -487,6 +487,11 @@ function generateVenueDocument(venueData) {
       });
     }
     
+    // Restore popularity from Pass 1 (already computed!)
+    if (venueData.popularity && venueData.popularity > 0) {
+      venueDoc.setPopularity(venueData.popularity);
+    }
+    
     // Restore type and type_name to addendum.osm
     // These will be automatically exposed in API response
     if (venueData.osm_type || venueData.osm_type_name) {

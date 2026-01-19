@@ -151,12 +151,19 @@ module.exports = function() {
           lat: centroid.lat,
           lon: centroid.lon,
           parent: {},
-          categories: []  // Store categories for Pass 2
+          categories: [],  // Store categories for Pass 2
+          popularity: 0    // Store popularity for Pass 2
         };
         
         // Copy categories if available (direct property access, not a method)
         if (doc.category && doc.category.length > 0) {
           venueData.categories = doc.category;
+        }
+        
+        // Copy popularity if available (already computed in Pass 1!)
+        const popularity = doc.getPopularity();
+        if (popularity && popularity > 0) {
+          venueData.popularity = popularity;
         }
         
         // Copy type and type_name if available
