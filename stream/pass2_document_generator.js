@@ -55,8 +55,8 @@ module.exports = function() {
   let streetsGenerated = 0;
   
   // Increase highWaterMark to reduce backpressure frequency
-  // Default is 16 objects, we increase to 1000 for better throughput
-  return through.obj({ highWaterMark: 1000 },
+  // Default is 16 objects, we increase to 500 for better throughput while preventing memory overflow
+  return through.obj({ highWaterMark: 500 },
     // Transform function - pass through (no documents come in)
     function(doc, enc, next) {
       next();
@@ -81,7 +81,7 @@ module.exports = function() {
       
       peliasLogger.info('[pass2_document_generator] ========================================');
       peliasLogger.info('[pass2_document_generator] Generating documents from LevelDB');
-      peliasLogger.info('[pass2_document_generator] Configuration: highWaterMark=1000, throttling enabled');
+      peliasLogger.info('[pass2_document_generator] Configuration: highWaterMark=500, backpressure handling enabled');
       peliasLogger.info('[pass2_document_generator] Streets DB: %s', streetsExist ? 'found' : 'not found');
       peliasLogger.info('[pass2_document_generator] Venues DB: %s', venuesExist ? 'found' : 'not found');
       peliasLogger.info('[pass2_document_generator] Localities DB: %s', localitiesExist ? 'found' : 'not found');
@@ -109,16 +109,13 @@ module.exports = function() {
                   // Push with backpressure handling
                   if (!self.push(venueDoc)) {
                     backpressureEvents++;
-                    peliasLogger.debug('[pass2_document_generator] Venues: backpressure at %d docs, throttling...', venuesGenerated);
-                    // Give downstream time to process without blocking on 'drain' event
-                    await new Promise(resolve => setImmediate(resolve));
+                    if (backpressureEvents % 100 === 0) {
+                      peliasLogger.debug('[pass2_document_generator] Venues: backpressure events: %d', backpressureEvents);
+                    }
+                    // Give downstream time to process - small delay to prevent overwhelming
+                    await new Promise(resolve => setTimeout(resolve, 10));
                   }
                   venuesGenerated++;
-                  
-                  // Periodic throttling every 500 docs to prevent overwhelming downstream
-                  if (venuesGenerated % 500 === 0) {
-                    await new Promise(resolve => setImmediate(resolve));
-                  }
                   
                   if (venuesGenerated % 1000 === 0) {
                     peliasLogger.info('[pass2_document_generator] Generated %d venues', venuesGenerated);
@@ -146,16 +143,13 @@ module.exports = function() {
                   // Push with backpressure handling
                   if (!self.push(localityDoc)) {
                     backpressureEvents++;
-                    peliasLogger.debug('[pass2_document_generator] Localities: backpressure at %d docs, throttling...', localitiesGenerated);
-                    // Give downstream time to process without blocking on 'drain' event
-                    await new Promise(resolve => setImmediate(resolve));
+                    if (backpressureEvents % 100 === 0) {
+                      peliasLogger.debug('[pass2_document_generator] Localities: backpressure events: %d', backpressureEvents);
+                    }
+                    // Give downstream time to process - small delay to prevent overwhelming
+                    await new Promise(resolve => setTimeout(resolve, 10));
                   }
                   localitiesGenerated++;
-                  
-                  // Periodic throttling every 500 docs to prevent overwhelming downstream
-                  if (localitiesGenerated % 500 === 0) {
-                    await new Promise(resolve => setImmediate(resolve));
-                  }
                   
                   if (localitiesGenerated % 1000 === 0) {
                     peliasLogger.info('[pass2_document_generator] Generated %d localities', localitiesGenerated);
@@ -277,16 +271,13 @@ module.exports = function() {
               // Push street document downstream with backpressure handling
               if (!self.push(streetDoc)) {
                 backpressureEvents++;
-                peliasLogger.debug('[pass2_document_generator] Streets: backpressure at %d docs, throttling...', streetsGenerated);
-                // Give downstream time to process without blocking on 'drain' event
-                await new Promise(resolve => setImmediate(resolve));
+                if (backpressureEvents % 100 === 0) {
+                  peliasLogger.debug('[pass2_document_generator] Streets: backpressure events: %d', backpressureEvents);
+                }
+                // Give downstream time to process - small delay to prevent overwhelming
+                await new Promise(resolve => setTimeout(resolve, 10));
               }
               streetsGenerated++;
-              
-              // Periodic throttling every 200 streets to prevent overwhelming downstream
-              if (streetsGenerated % 200 === 0) {
-                await new Promise(resolve => setImmediate(resolve));
-              }
               
               // ALSO generate individual address documents for each house number
               // This allows searching for specific addresses like "Szkutnicza 10"
@@ -321,16 +312,13 @@ module.exports = function() {
                     // Push with backpressure handling
                     if (!self.push(addressDoc)) {
                       backpressureEvents++;
-                      peliasLogger.debug('[pass2_document_generator] Addresses: backpressure at %d docs, throttling...', addressesGenerated);
-                      // Give downstream time to process without blocking on 'drain' event
-                      await new Promise(resolve => setImmediate(resolve));
+                      if (backpressureEvents % 100 === 0) {
+                        peliasLogger.debug('[pass2_document_generator] Addresses: backpressure events: %d', backpressureEvents);
+                      }
+                      // Give downstream time to process - small delay to prevent overwhelming
+                      await new Promise(resolve => setTimeout(resolve, 10));
                     }
                     addressesGenerated++;
-                    
-                    // Periodic throttling every 1000 addresses to prevent overwhelming downstream
-                    if (addressesGenerated % 1000 === 0) {
-                      await new Promise(resolve => setImmediate(resolve));
-                    }
                   } catch (addrErr) {
                     peliasLogger.error('[pass2_document_generator] Error generating address %s %s: %s', streetName, houseNumber, addrErr.message);
                   }
