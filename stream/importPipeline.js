@@ -73,12 +73,14 @@ streams.importPass1 = function(callback){
     .pipe( streams.documentSplitter() )  // Split: LevelDB vs direct to Elasticsearch
     .on('finish', function() {
       peliasLogger.info('[importPipeline] Pass 1 complete, waiting for LevelDB to close...');
-      // Wait 2 seconds for LevelDB flush and close to complete
+      // Wait 30 seconds for LevelDB flush and close to complete
       // This prevents LEVEL_LOCKED errors when Pass 2 tries to open the same DBs
+      // For large files (e.g. Poland with 1M venues, 8.6M addresses), 
+      // closing databases with flush queues can take significant time
       setTimeout(() => {
         peliasLogger.info('[importPipeline] Starting Pass 2...');
       callback();
-      }, 2000);
+      }, 30000);
     })
     .on('error', function(err) {
       peliasLogger.error('[importPipeline] Pass 1 error:', err);

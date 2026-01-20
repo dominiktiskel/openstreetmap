@@ -12,11 +12,11 @@
   
   Strategy:
   - Collect addresses in memory buffer (Map of street → aggregates)
-  - Flush to LevelDB every BATCH_SIZE addresses (default: 10,000)
+  - Flush to LevelDB every BATCH_SIZE addresses (default: 2,500)
   - Merge with existing LevelDB data on each flush
   - Final flush at end of stream
   
-  @version 2.0.0
+  @version 2.8.0
   @see: pass2_document_generator.js for Pass 2
 **/
 
@@ -27,13 +27,14 @@ const peliasLogger = require('pelias-logger').get('openstreetmap');
 const peliasConfig = require('pelias-config').generate();
 const _ = require('lodash');
 const fs = require('fs');
+const { EventEmitter } = require('events');
 
 // Configuration
 const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
 const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
 const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation-v2');
 
-const BATCH_SIZE = 10000;
+const BATCH_SIZE = 2500;  // Small batches to prevent OOM with blocking flush
 
 /**
  * Generate aggregation key for V2 pipeline
@@ -190,11 +191,14 @@ module.exports = function() {
   
   if (!enabled) {
     peliasLogger.info('[house_numbers_collector_v2] Aggregation disabled');
-    return through.obj();
+    const emptyStream = through.obj();
+    emptyStream.events = new EventEmitter();
+    return emptyStream;
   }
   
   // Open LevelDB
   const db = new Level(DB_PATH, { valueEncoding: 'json' });
+  let dbOpened = false;
   
   // Statistics
   let docCount = 0;
@@ -204,7 +208,22 @@ module.exports = function() {
   // In-memory buffer for current batch
   const buffer = new Map();
   
-  return through.obj(
+  // Async flush queue to ensure sequential execution
+  let flushQueue = Promise.resolve();
+  
+  // EventEmitter to signal when truly closed
+  const collectorEvents = new EventEmitter();
+  
+  // Helper to ensure DB is opened once
+  const ensureDbOpen = async () => {
+    if (!dbOpened) {
+      await db.open();
+      dbOpened = true;
+      peliasLogger.info('[house_numbers_collector_v2] LevelDB opened at %s', DB_PATH);
+    }
+  };
+  
+  const stream = through.obj(
     // Transform function - collect to buffer
     function(doc, enc, next) {
       try {
@@ -261,7 +280,7 @@ module.exports = function() {
               aggregate.zip = doc.getAddress('zip');
             }
             
-            // Periodic batch write
+            // Periodic batch write - ASYNC (non-blocking)
             if (docCount % BATCH_SIZE === 0) {
               batchNumber++;
               peliasLogger.info(
@@ -271,17 +290,18 @@ module.exports = function() {
                 buffer.size
               );
               
-              // Flush buffer to LevelDB asynchronously
-              (async () => {
+              // Create a copy of current buffer for flushing
+              const bufferToFlush = new Map(buffer);
+              buffer.clear();
+              
+              // Add flush to queue - ASYNC, doesn't block stream
+              flushQueue = flushQueue.then(async () => {
                 try {
-                  await db.open();
-                  await flushBufferToLevelDB(db, buffer, totalStreetCount);
-                  buffer.clear();
+                  await ensureDbOpen();
+                  await flushBufferToLevelDB(db, bufferToFlush, totalStreetCount);
                 } catch (err) {
                   peliasLogger.error('[house_numbers_collector_v2] Flush error:', err);
                 }
-              })().catch(err => {
-                peliasLogger.error('[house_numbers_collector_v2] Async flush error:', err);
               });
             }
           }
@@ -306,18 +326,44 @@ module.exports = function() {
       
       (async () => {
         try {
-          await db.open();
-          await flushBufferToLevelDB(db, buffer, totalStreetCount);
-          await db.close();
+          // Wait for all queued flushes to complete
+          peliasLogger.info('[house_numbers_collector_v2] Waiting for async flush queue to complete...');
+          await flushQueue;
+          peliasLogger.info('[house_numbers_collector_v2] All queued flushes completed');
+          
+          // Flush remaining buffer if not empty
+          if (buffer.size > 0) {
+            peliasLogger.info('[house_numbers_collector_v2] Flushing remaining buffer: %d streets', buffer.size);
+            await ensureDbOpen();
+            await flushBufferToLevelDB(db, buffer, totalStreetCount);
+          }
+          
+          // Close database
+          if (dbOpened) {
+            peliasLogger.info('[house_numbers_collector_v2] Closing database...');
+            await db.close();
+            peliasLogger.info('[house_numbers_collector_v2] Database closed successfully');
+          }
           
           peliasLogger.info('[house_numbers_collector_v2] Collection complete: %d addresses processed', docCount);
+          
+          // Signal completion via EventEmitter
+          collectorEvents.emit('closed');
+          
+          // Call done() to complete the stream
           done();
         } catch (err) {
           peliasLogger.error('[house_numbers_collector_v2] Final flush error:', err);
+          collectorEvents.emit('error', err);
           done(err);
         }
       })();
     }
   );
+  
+  // Attach EventEmitter to stream for external synchronization
+  stream.events = collectorEvents;
+  
+  return stream;
 };
 

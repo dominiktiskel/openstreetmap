@@ -11,7 +11,7 @@
  * 
  * This completely eliminates ES client reuse issues!
  * 
- * @version 2.4.0
+ * @version 2.8.0
  */
 
 const through = require('through2');
@@ -41,21 +41,23 @@ module.exports = function() {
         const layer = doc.getLayer();
         const hasStreet = doc.getAddress('street');
         
+        let canContinue = true;
+        
         // Addresses with street → street collector (aggregation)
         if (layer === 'address' && hasStreet) {
           toStreetCollector++;
-          streetCollector.write(doc);
+          canContinue = streetCollector.write(doc);
         }
         // Localities → locality collector (individual documents)
         else if (layer === 'locality') {
           toLocalityCollector++;
-          localityCollector.write(doc);
+          canContinue = localityCollector.write(doc);
         }
         // Everything else → venue collector (individual documents)
         // (venues, POI, addresses without street)
         else {
           toVenueCollector++;
-          venueCollector.write(doc);
+          canContinue = venueCollector.write(doc);
         }
         
         // Log progress periodically
@@ -68,11 +70,20 @@ module.exports = function() {
             toVenueCollector
           );
         }
+        
+        // Handle backpressure - wait for drain if buffer is full
+        if (!canContinue) {
+          const collector = layer === 'address' && hasStreet ? streetCollector :
+                           layer === 'locality' ? localityCollector :
+                           venueCollector;
+          collector.once('drain', next);
+        } else {
+          next();
+        }
       } catch (err) {
         peliasLogger.error('[document_splitter] Error processing document:', err);
+        next();
       }
-      
-      next(); // Don't push downstream - we're the end of the pipeline
     },
     
     function flush(done) {
@@ -84,14 +95,43 @@ module.exports = function() {
         toVenueCollector
       );
       
-      // Close all three collectors
-      streetCollector.end(() => {
-        localityCollector.end(() => {
-          venueCollector.end(() => {
-            done();
-          });
-        });
-      });
+      // Wait for all collectors to truly close via EventEmitter
+      let closedCount = 0;
+      const totalCollectors = 3;
+      
+      const onClosed = (collectorName) => {
+        peliasLogger.info('[document_splitter] %s closed', collectorName);
+        closedCount++;
+        if (closedCount === totalCollectors) {
+          peliasLogger.info('[document_splitter] All collectors closed');
+          done();
+        }
+      };
+      
+      // Listen for 'closed' events from each collector
+      streetCollector.events.once('closed', () => onClosed('Street collector'));
+      localityCollector.events.once('closed', () => onClosed('Locality collector'));
+      venueCollector.events.once('closed', () => onClosed('Venue collector'));
+      
+      // Handle errors
+      const onError = (err, collectorName) => {
+        peliasLogger.error('[document_splitter] Error closing %s:', collectorName, err);
+        // Still count it as closed to not block forever
+        closedCount++;
+        if (closedCount === totalCollectors) {
+          done(err);
+        }
+      };
+      
+      streetCollector.events.once('error', (err) => onError(err, 'Street collector'));
+      localityCollector.events.once('error', (err) => onError(err, 'Locality collector'));
+      venueCollector.events.once('error', (err) => onError(err, 'Venue collector'));
+      
+      // Initiate closing - this will trigger the flush in each collector
+      peliasLogger.info('[document_splitter] Initiating collector shutdown...');
+      streetCollector.end();
+      localityCollector.end();
+      venueCollector.end();
     }
   );
   

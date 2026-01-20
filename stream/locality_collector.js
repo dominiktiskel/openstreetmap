@@ -11,7 +11,7 @@
  * 
  * In Pass 2, these will be read from LevelDB and imported to Elasticsearch.
  * 
- * @version 2.4.0
+ * @version 2.8.0
  */
 
 const through = require('through2');
@@ -21,19 +21,26 @@ const peliasLogger = require('pelias-logger').get('openstreetmap');
 const peliasConfig = require('pelias-config').generate();
 const _ = require('lodash');
 const fs = require('fs');
+const { EventEmitter } = require('events');
 
 // Configuration
 const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
 const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-localities'); // Separate DB for localities!
 
 // In-memory buffer before writing to LevelDB
-const BUFFER_SIZE = 1000;
+const BUFFER_SIZE = 500;  // Small buffer to prevent OOM with blocking flush
 
 module.exports = function() {
   let db = null;
   let buffer = [];
   let totalLocalities = 0;
   let dbInitialized = false;
+  
+  // Async flush queue to ensure sequential execution
+  let flushQueue = Promise.resolve();
+  
+  // EventEmitter to signal when truly closed
+  const collectorEvents = new EventEmitter();
   
   // Initialize DB synchronously
   const initDB = async () => {
@@ -72,37 +79,50 @@ module.exports = function() {
     
     function flush(done) {
       // Final flush
-      const closeDB = () => {
-        if (db) {
-          peliasLogger.info('[locality_collector] Closing database');
-          db.close().then(() => {
+      (async () => {
+        try {
+          // Wait for all queued flushes to complete
+          peliasLogger.info('[locality_collector] Waiting for async flush queue to complete...');
+          await flushQueue;
+          peliasLogger.info('[locality_collector] All queued flushes completed');
+          
+          // Flush remaining buffer if not empty
+          if (buffer.length > 0 && db) {
+            const batch = db.batch();
+            for (const { key, value } of buffer) {
+              batch.put(key, value);
+            }
+            await batch.write();
+            peliasLogger.info(
+              '[locality_collector] Final flush: %d localities saved to LevelDB',
+              totalLocalities
+            );
+          } else if (totalLocalities === 0) {
+            peliasLogger.info('[locality_collector] No localities to save');
+          }
+          
+          // Close database
+          if (db) {
+            peliasLogger.info('[locality_collector] Closing database');
+            await db.close();
             peliasLogger.info('[locality_collector] Database closed successfully');
-            done();
-          }).catch((err) => {
-            peliasLogger.error('[locality_collector] Error closing database:', err);
-            done(err);
-          });
-        } else {
+          }
+          
+          // Signal completion via EventEmitter
+          collectorEvents.emit('closed');
+          
           done();
+        } catch (err) {
+          peliasLogger.error('[locality_collector] Final flush error:', err);
+          collectorEvents.emit('error', err);
+          done(err);
         }
-      };
-      
-      if (buffer.length > 0 && db) {
-        flushBuffer(db, buffer, () => {
-          peliasLogger.info(
-            '[locality_collector] Final flush: %d localities saved to LevelDB',
-            totalLocalities
-          );
-          closeDB();
-        });
-      } else {
-        if (totalLocalities === 0) {
-          peliasLogger.info('[locality_collector] No localities to save');
-        }
-        closeDB(); // Close DB even if buffer is empty!
-      }
+      })();
     }
   );
+  
+  // Attach EventEmitter to stream for external synchronization
+  stream.events = collectorEvents;
   
   // Process document function
   function processDocument(doc, next) {
@@ -161,13 +181,24 @@ module.exports = function() {
         buffer.push({ key: key, value: localityData });
         totalLocalities++;
         
-        // Flush buffer if it's full
+        // Flush buffer if it's full - ASYNC (non-blocking)
         if (buffer.length >= BUFFER_SIZE) {
-          const currentBuffer = buffer.slice();
+          const bufferToFlush = buffer.slice();
           buffer = [];
           
-          flushBuffer(db, currentBuffer, () => {
-            peliasLogger.debug('[locality_collector] Buffer flushed: %d localities', currentBuffer.length);
+          // Add flush to queue - ASYNC, doesn't block stream
+          flushQueue = flushQueue.then(async () => {
+            if (!db || bufferToFlush.length === 0) return;
+            try {
+              const batch = db.batch();
+              for (const { key, value } of bufferToFlush) {
+                batch.put(key, value);
+              }
+              await batch.write();
+              peliasLogger.debug('[locality_collector] Buffer flushed: %d localities', bufferToFlush.length);
+            } catch (err) {
+              peliasLogger.error('[locality_collector] Error flushing buffer:', err);
+            }
           });
         }
         
@@ -184,29 +215,4 @@ module.exports = function() {
   return stream;
 };
 
-/**
- * Flush buffer to LevelDB using batch operation
- */
-function flushBuffer(db, buffer, callback) {
-  if (!db || buffer.length === 0) {
-    return callback();
-  }
-  
-  // Prepare batch operations
-  const batch = buffer.map(item => ({
-    type: 'put',
-    key: item.key,
-    value: item.value
-  }));
-  
-  // Execute batch
-  db.batch(batch)
-    .then(() => {
-      callback();
-    })
-    .catch(err => {
-      peliasLogger.error('[locality_collector] Error flushing buffer to LevelDB:', err);
-      callback(err);
-    });
-}
 

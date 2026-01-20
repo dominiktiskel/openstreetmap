@@ -11,7 +11,7 @@
  * 
  * In Pass 2, these will be read from LevelDB and imported to Elasticsearch.
  * 
- * @version 2.0.0
+ * @version 2.8.0
  */
 
 const through = require('through2');
@@ -21,19 +21,26 @@ const peliasLogger = require('pelias-logger').get('openstreetmap');
 const peliasConfig = require('pelias-config').generate();
 const _ = require('lodash');
 const fs = require('fs');
+const { EventEmitter } = require('events');
 
 // Configuration
 const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
 const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-venues-v2'); // Separate DB for venues!
 
 // In-memory buffer before writing to LevelDB
-const BUFFER_SIZE = 1000;
+const BUFFER_SIZE = 500;  // Small buffer to prevent OOM with blocking flush
 
 module.exports = function() {
   let db = null;
   let buffer = [];
   let totalVenues = 0;
   let dbInitialized = false;
+  
+  // Async flush queue to ensure sequential execution
+  let flushQueue = Promise.resolve();
+  
+  // EventEmitter to signal when truly closed
+  const collectorEvents = new EventEmitter();
   
   // Initialize DB synchronously
   const initDB = async () => {
@@ -72,37 +79,48 @@ module.exports = function() {
     
     function flush(done) {
       // Final flush
-      const closeDB = () => {
-        if (db) {
-          peliasLogger.info('[venue_collector] Closing database');
-          db.close().then(() => {
+      (async () => {
+        try {
+          // Wait for all queued flushes to complete
+          peliasLogger.info('[venue_collector] Waiting for async flush queue to complete...');
+          await flushQueue;
+          peliasLogger.info('[venue_collector] All queued flushes completed');
+          
+          // Flush remaining buffer if not empty
+          if (buffer.length > 0 && db) {
+            for (const { key, value } of buffer) {
+              await db.put(key, value);
+            }
+            peliasLogger.info(
+              '[venue_collector] Final flush: %d venues/POI (including alternative names) saved to LevelDB',
+              totalVenues
+            );
+          } else if (totalVenues === 0) {
+            peliasLogger.info('[venue_collector] No venues to save (including alternative names)');
+          }
+          
+          // Close database
+          if (db) {
+            peliasLogger.info('[venue_collector] Closing database');
+            await db.close();
             peliasLogger.info('[venue_collector] Database closed successfully');
-            done();
-          }).catch((err) => {
-            peliasLogger.error('[venue_collector] Error closing database:', err);
-            done(err);
-          });
-        } else {
+          }
+          
+          // Signal completion via EventEmitter
+          collectorEvents.emit('closed');
+          
           done();
+        } catch (err) {
+          peliasLogger.error('[venue_collector] Final flush error:', err);
+          collectorEvents.emit('error', err);
+          done(err);
         }
-      };
-      
-      if (buffer.length > 0 && db) {
-        flushBuffer(db, buffer, () => {
-          peliasLogger.info(
-            '[venue_collector] Final flush: %d venues/POI (including alternative names) saved to LevelDB',
-            totalVenues
-          );
-          closeDB();
-        });
-      } else {
-        if (totalVenues === 0) {
-          peliasLogger.info('[venue_collector] No venues to save (including alternative names)');
-        }
-        closeDB(); // Close DB even if buffer is empty!
-      }
+      })();
     }
   );
+  
+  // Attach EventEmitter to stream for external synchronization
+  stream.events = collectorEvents;
   
   // Process document function
   function processDocument(doc, next) {
@@ -280,15 +298,25 @@ module.exports = function() {
           totalVenues++;
         });
         
-        // Flush buffer if full
+        // Flush buffer if full - ASYNC (non-blocking)
         if (buffer.length >= BUFFER_SIZE) {
-          flushBuffer(db, buffer, () => {
-            buffer = [];
-            next();
+          const bufferToFlush = [...buffer];  // Copy buffer
+          buffer = [];  // Clear buffer immediately
+          
+          // Add flush to queue - ASYNC, doesn't block stream
+          flushQueue = flushQueue.then(async () => {
+            if (!db || bufferToFlush.length === 0) return;
+            try {
+              for (const { key, value } of bufferToFlush) {
+                await db.put(key, value);
+              }
+            } catch (err) {
+              peliasLogger.error('[venue_collector] Error flushing buffer:', err);
+            }
           });
-        } else {
-          next();
         }
+        
+        next();
       } catch (err) {
         peliasLogger.error('[venue_collector] Error processing document:', err);
         next();
@@ -301,24 +329,4 @@ module.exports = function() {
   return stream;
 };
 
-/**
- * Flush buffer to LevelDB
- */
-function flushBuffer(db, buffer, callback) {
-  if (!db || buffer.length === 0) {
-    return callback();
-  }
-  
-  (async () => {
-    try {
-      for (const { key, value } of buffer) {
-        await db.put(key, value);
-      }
-      callback();
-    } catch (err) {
-      peliasLogger.error('[venue_collector] Error flushing buffer:', err);
-      callback(err);
-    }
-  })();
-}
 

@@ -48,13 +48,6 @@ module.exports = function() {
       // Select appropriate type mapping (fallback to English if not available)
       const typeMapping = typeMaps[languageCode] || typeMaps.en;
       
-      // Log language selection at debug level for verification
-      if (country) {
-        peliasLogger.debug('[type_mapper] Country: %s, Language: %s', country, languageCode);
-      } else {
-        peliasLogger.debug('[type_mapper] No country found, using default language: %s', languageCode);
-      }
-
       // Find first matching type (priority order matters)
       // Priority: aeroway > amenity > highway > public_transport > shop > tourism > leisure > building
       let typeData = null;

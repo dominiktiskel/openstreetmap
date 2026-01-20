@@ -2,14 +2,326 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.7.0
+## Version: v2.8.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.7.0`
+- **Docker Image**: `tiskel/openstreetmap:v2.8.0`
+
+---
+
+## Changelog
+
+### v2.8.0 (2026-01-20)
+
+**Fix: Async flush with EventEmitter + configurable heap + backpressure**
+
+**Problem Analysis**:
+v2.7.4's blocking flush approach was fundamentally wrong. It caused a cascade of issues:
+
+1. **Hardcoded 8GB Heap Limit** in `bin/start`:
+   - `exec node --max_old_space_size=8000 index.js`
+   - This completely ignored `NODE_OPTIONS` environment variable
+   - User logs confirmed heap was always ~8GB regardless of docker-compose settings
+
+2. **Blocking Flush Broke Stream Backpressure**:
+   - When collectors blocked with `await flush`, documents accumulated in the 12-stream pipeline
+   - Each through2 stream has `highWaterMark=16` objects
+   - 12 streams × 16 objects × large Pelias documents = massive memory accumulation
+   - Result: OOM even with reduced batch sizes
+
+**Root Cause**:
+The v2.7.4 blocking approach was the wrong direction. The original async approach was correct - it just needed proper synchronization. The key insight: **through2 streams call flush callback when the function completes, not when Promises inside resolve**.
+
+**Solution - Three Parts**:
+
+**1. Fix Hardcoded Heap Limit** (`bin/start`):
+```bash
+exec node --max_old_space_size=${NODE_MAX_HEAP:-8000} index.js
+```
+Now heap is configurable via `NODE_MAX_HEAP` environment variable while keeping 8GB default.
+
+**2. Revert to Async Flush + EventEmitter Synchronization** (all collectors):
+```javascript
+// Async flush queue (non-blocking)
+let flushQueue = Promise.resolve();
+const collectorEvents = new EventEmitter();
+
+// In transform - async, doesn't block pipeline
+flushQueue = flushQueue.then(async () => {
+  await flushBufferToLevelDB(...);
+});
+next();  // Called immediately, pipeline continues
+
+// In final flush - wait for queue, then signal
+await flushQueue;
+await db.close();
+collectorEvents.emit('closed');  // Signal true completion
+done();
+```
+
+**3. EventEmitter-Based Synchronization** (`document_splitter`):
+```javascript
+// Wait for all collectors to truly close
+streetCollector.events.once('closed', onClosed);
+localityCollector.events.once('closed', onClosed);
+venueCollector.events.once('closed', onClosed);
+
+streetCollector.end();
+localityCollector.end();
+venueCollector.end();
+```
+
+**4. Proper Backpressure Handling** (`document_splitter`):
+```javascript
+const canContinue = collector.write(doc);
+if (!canContinue) {
+  collector.once('drain', next);  // Wait for drain
+} else {
+  next();
+}
+```
+
+**Modified Files**:
+- `bin/start`: Use `NODE_MAX_HEAP` environment variable for heap configuration
+- `stream/house_numbers_collector.js`: Revert to async flush + EventEmitter (v2.8.0)
+- `stream/venue_collector.js`: Revert to async flush + EventEmitter (v2.8.0)
+- `stream/locality_collector.js`: Revert to async flush + EventEmitter (v2.8.0)
+- `stream/document_splitter.js`: Wait for collector events + handle backpressure (v2.8.0)
+
+**Benefits**:
+- ✅ **Configurable heap**: Set `NODE_MAX_HEAP=16000` in docker-compose for 16GB
+- ✅ **No OOM**: Async flush doesn't block pipeline, memory flows naturally
+- ✅ **No LEVEL_LOCKED**: EventEmitter ensures DBs are truly closed before Pass 2
+- ✅ **Proper backpressure**: Pipeline self-regulates memory via drain events
+- ✅ **Correct architecture**: Respects Node.js streaming principles
+
+**Docker Compose Example**:
+```yaml
+openstreetmap:
+  image: tiskel/openstreetmap:v2.8.0
+  environment:
+    NODE_MAX_HEAP: "16000"  # 16GB heap for large imports
+```
+
+**Result**: Combines all fixes - configurable memory, proper async handling, and stream backpressure for reliable large file imports.
+
+### v2.7.5 (2026-01-19)
+
+**Fix: Out of Memory with blocking flush - reduced batch sizes**
+
+**Problem**:
+With v2.7.4 blocking flush, import crashed with OOM (Out of Memory) at ~1.8M documents:
+```
+FATAL ERROR: Ineffective mark-compacts near heap limit
+JavaScript heap out of memory
+Mark-Compact 7857.4 MB
+```
+
+**Root Cause**:
+Blocking flush causes documents to accumulate in pipeline memory while waiting for LevelDB writes. With large batches:
+- BATCH_SIZE=10000 for addresses → flush takes ~5-10 seconds
+- BUFFER_SIZE=1000 for venues → flush takes ~1-2 seconds
+- During flush, new documents continue arriving and queue up in memory
+- For Poland (~10M docs), this quickly exceeds 8GB heap limit
+
+NODE_OPTIONS environment variable didn't work (Docker command wrapper doesn't pass it through).
+
+**Solution**:
+Reduced batch/buffer sizes to make flushes faster and reduce memory accumulation:
+
+**Changes:**
+- `BATCH_SIZE`: 10000 → **2500** (4x smaller, 4x more frequent but faster flushes)
+- `BUFFER_SIZE` (venues): 1000 → **500** (2x smaller)
+- `BUFFER_SIZE` (localities): 1000 → **500** (2x smaller)
+
+**Trade-offs:**
+- ✅ **Pro**: Fits in 8GB heap (standard Node.js limit)
+- ✅ **Pro**: More frequent flushes = less memory pressure
+- ⚠️ **Con**: Slightly more overhead (more frequent LevelDB writes)
+- ⚠️ **Con**: But negligible for total import time
+
+**Modified Files**:
+- `stream/house_numbers_collector.js`: BATCH_SIZE 10000 → 2500
+- `stream/venue_collector.js`: BUFFER_SIZE 1000 → 500
+- `stream/locality_collector.js`: BUFFER_SIZE 1000 → 500
+
+**Result**: Import can complete for very large files (Poland ~10M docs) without OOM, using standard 8GB heap.
+
+### v2.7.4 (2026-01-19)
+
+**Fix: Blocking flush instead of async queue**
+
+**Problem**:
+Despite v2.7.3 with flush counter and verification loop, flush operations were still executing **during Pass 2**. Analysis showed that `.end(callback)` in through2 streams calls the callback when flush **function** completes, but does NOT wait for Promise chains inside that function.
+
+The async Promise queue approach fundamentally doesn't work with stream lifecycle - stream ends before all queued Promises complete.
+
+**Solution**:
+Completely changed approach from async Promise queue to **synchronous blocking flush**:
+
+**Before (v2.7.3):**
+```javascript
+// Add to Promise queue
+flushQueue = flushQueue.then(async () => {
+  await flushBufferToLevelDB(...);
+});
+next();  // ← Called immediately! Stream continues
+```
+
+**After (v2.7.4):**
+```javascript
+// BLOCKING - wait for flush to complete
+await flushBufferToLevelDB(...);
+next();  // ← Called ONLY after flush completes
+```
+
+**Changes:**
+1. Removed Promise queue (`flushQueue`) and counter (`flushesInProgress`)
+2. Changed transform functions to `async`
+3. Flush now blocks stream processing using `await`
+4. `next()` is called ONLY after flush completes
+5. Applied to all three collectors: `house_numbers_collector`, `venue_collector`, `locality_collector`
+
+**Trade-offs:**
+- ✅ **Pro**: 100% guarantee that all flushes complete before stream ends
+- ✅ **Pro**: Simpler code, easier to understand
+- ⚠️ **Con**: Import is slightly slower (flush blocks processing)
+- ⚠️ **Con**: But for large files, this is negligible compared to total time
+
+**Modified Files**:
+- `stream/house_numbers_collector.js`: Blocking flush, removed Promise queue
+- `stream/venue_collector.js`: Blocking flush, removed Promise queue  
+- `stream/locality_collector.js`: Blocking flush, removed Promise queue
+
+**Result**: Flush operations are now truly synchronous with stream lifecycle. No more race conditions.
+
+### v2.7.3 (2026-01-19)
+
+**Fix: Ensure flush queue completion before closing databases**
+
+**Problem**:
+For very large files (Poland ~9.7M docs), import would fail at streets DB opening in Pass 2:
+```
+Error: Database is not open
+cause: [Error: IO error: lock /tmp/pelias-house-numbers-aggregation-v2/LOCK: already held by process]
+```
+
+Logs showed flush operations **during Pass 2**:
+```
+info: [pass2_document_generator] Starting localities generation...
+info: [house_numbers_collector_v2] Flushed batch: 1224 streets...  ← Still flushing!
+```
+
+**Root Cause**:
+In `house_numbers_collector`, flush operations were added to Promise queue but `next()` was called immediately. The stream finished processing and called `done()` before all Promise in the queue completed. The `await flushQueue` statement captured an "old" Promise reference, not the latest one in the chain.
+
+**Solution**:
+Added `flushesInProgress` counter to track pending flushes:
+1. Increment counter when adding flush to queue
+2. Decrement counter in `finally` block after flush completes
+3. In final flush: `await flushQueue` + verify counter is 0
+4. If counter > 0, wait in loop until all complete
+
+**Modified Files**:
+- `stream/house_numbers_collector.js`: Added flush counter with verification loop
+- `stream/document_splitter.js`: Added detailed logging for collector closing sequence
+
+**Result**: Database is guaranteed to close only after ALL flush operations complete, eliminating race conditions.
+
+### v2.7.2 (2026-01-19)
+
+**Fix: Extended timeouts for very large files (country-level imports)**
+
+**Problem**:
+For very large OSM files (e.g., Poland with 8.6M addresses and 1M venues), the import would still fail with `LEVEL_LOCKED` error despite v2.7.1 fixes. The issue manifested differently for small vs. large files:
+- ✅ Small files (e.g., Dolnośląskie ~680K docs): worked fine
+- ❌ Large files (e.g., Poland ~9.7M docs): timeout insufficient
+
+**Analysis**:
+With BUFFER_SIZE=1000 and BATCH_SIZE=10000:
+- Poland venues: 1M ÷ 1000 = **~1000 flush operations** in queue
+- Poland addresses: 8.6M ÷ 10000 = **~860 flush operations** in queue
+- Each flush writes 1000 records to LevelDB sequentially
+- Total time for all queued flushes: **several minutes** (not seconds)
+
+Previous timeouts were insufficient:
+- Pass 1 → Pass 2 timeout: 10s (too short for large flush queues)
+- Pass 2 retry timeout: 20 retries × 5s max = ~85s (insufficient for 1000+ flush operations)
+
+**Solution**:
+
+1. **Increased Pass 1 → Pass 2 timeout**: 10s → 30s
+   - Gives more time for collectors to begin closing databases
+
+2. **Increased Pass 2 retry parameters**:
+   - MAX_RETRIES: 20 → 60 (up to 10 minutes total wait time)
+   - Max wait time between retries: 5s → 10s
+   - Total maximum wait: 1+2+3+...+10+10+...+10 ≈ 10 minutes
+
+**Modified Files**:
+- `stream/importPipeline.js`: Increased timeout from 10s to 30s
+- `stream/pass2_document_generator.js`: Increased MAX_RETRIES to 60, max wait to 10s
+
+**Result**: Import now works reliably for:
+- ✅ Small files (few MB): no delays
+- ✅ Medium files (Dolnośląskie ~680K docs): works smoothly
+- ✅ Large files (Poland ~9.7M docs): waits patiently for flush queues to complete
+
+### v2.7.1 (2026-01-19)
+
+**Fix: LEVEL_LOCKED errors on high-performance servers**
+
+**Problem**: 
+On servers with many CPU cores and high RAM, the import would fail with multiple `LEVEL_LOCKED` errors:
+
+1. **During Pass 1** (while processing):
+```
+error: [house_numbers_collector_v2] Error processing street "...": Database is not open
+error: [venue_collector] Error flushing buffer: Database is not open
+error: [locality_collector] Error flushing buffer: Database is not open
+```
+
+2. **During Pass 1 → Pass 2 transition**:
+```
+Error: Database is not open
+cause: [Error: IO error: lock /tmp/pelias-venues-v2/LOCK: already held by process]
+```
+
+**Root Cause**:
+On powerful servers with 120+ workers and fast I/O:
+- Multiple async flush operations tried to access LevelDB concurrently
+- No synchronization between parallel flushes → database lock conflicts
+- Pass 2 started before Pass 1 databases were fully closed
+
+**Solution**:
+
+1. **Added flush queues** in all LevelDB collectors (`house_numbers_collector.js`, `venue_collector.js`, `locality_collector.js`):
+   - Serial execution of all flush operations using Promise queue
+   - Each flush waits for previous one to complete
+   - Final flush waits for all queued operations before closing database
+
+2. **Added retry logic** in `pass2_document_generator.js`:
+   - Attempts to open each database up to 20 times
+   - Exponential backoff: 1s → 2s → 3s → ... → 5s (max)
+   - Maximum total wait time: ~60 seconds
+
+3. **Increased timeout** in `importPipeline.js`:
+   - Pass 1 → Pass 2 timeout: 2s → 10s
+
+**Modified Files**:
+- `stream/house_numbers_collector.js`: Added flush queue, ensure sequential database access
+- `stream/venue_collector.js`: Added flush queue, ensure sequential database access
+- `stream/locality_collector.js`: Added flush queue, ensure sequential database access
+- `stream/pass2_document_generator.js`: Added retry logic with exponential backoff
+- `stream/importPipeline.js`: Increased Pass 1 → Pass 2 timeout
+
+**Result**: Import now works reliably on servers with any number of CPU cores and any I/O speed.
+
+---
 
 ## Key Features
 

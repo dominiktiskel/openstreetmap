@@ -30,7 +30,7 @@
  * This is the ONLY place where Elasticsearch client is created,
  * completely eliminating ES client reuse issues!
  * 
- * @version 2.4.0
+ * @version 2.7.5 - Reduced batch sizes to prevent OOM with blocking flush
  */
 
 const through = require('through2');
@@ -99,8 +99,34 @@ module.exports = function() {
           // FIRST: Generate venue documents from venues DB
           if (venuesExist) {
             peliasLogger.info('[pass2_document_generator] Starting venues generation with backpressure handling...');
-            const venuesDb = new Level(VENUES_DB_PATH, { valueEncoding: 'json' });
-            await venuesDb.open();
+            
+            // Retry logic for opening database - may be locked from Pass 1
+            // For large files (e.g. Poland with 1M venues), flush queue can take several minutes
+            let venuesDb = null;
+            let retries = 0;
+            const MAX_RETRIES = 60;  // 60 attempts = up to ~10 minutes total
+            
+            while (retries < MAX_RETRIES) {
+              try {
+                venuesDb = new Level(VENUES_DB_PATH, { valueEncoding: 'json' });
+                await venuesDb.open();
+                peliasLogger.info('[pass2_document_generator] Venues DB opened successfully');
+                break;  // Success!
+              } catch (err) {
+                if (err.code === 'LEVEL_LOCKED' && retries < MAX_RETRIES - 1) {
+                  retries++;
+                  const waitTime = Math.min(1000 * retries, 10000);  // Exponential backoff, max 10s
+                  peliasLogger.warn('[pass2_document_generator] Venues DB locked, retry %d/%d in %dms...', retries, MAX_RETRIES, waitTime);
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+                } else {
+                  throw err;  // Give up
+                }
+              }
+            }
+            
+            if (!venuesDb) {
+              throw new Error('Failed to open Venues DB after ' + MAX_RETRIES + ' retries');
+            }
             
             for await (const [key, venueData] of venuesDb.iterator()) {
               try {
@@ -133,8 +159,33 @@ module.exports = function() {
           // SECOND: Generate locality documents from localities DB
           if (localitiesExist) {
             peliasLogger.info('[pass2_document_generator] Starting localities generation with backpressure handling...');
-            const localitiesDb = new Level(LOCALITIES_DB_PATH, { valueEncoding: 'json' });
-            await localitiesDb.open();
+            
+            // Retry logic for opening database - may be locked from Pass 1
+            let localitiesDb = null;
+            let retries = 0;
+            const MAX_RETRIES = 60;
+            
+            while (retries < MAX_RETRIES) {
+              try {
+                localitiesDb = new Level(LOCALITIES_DB_PATH, { valueEncoding: 'json' });
+                await localitiesDb.open();
+                peliasLogger.info('[pass2_document_generator] Localities DB opened successfully');
+                break;
+              } catch (err) {
+                if (err.code === 'LEVEL_LOCKED' && retries < MAX_RETRIES - 1) {
+                  retries++;
+                  const waitTime = Math.min(1000 * retries, 10000);
+                  peliasLogger.warn('[pass2_document_generator] Localities DB locked, retry %d/%d in %dms...', retries, MAX_RETRIES, waitTime);
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+                } else {
+                  throw err;
+                }
+              }
+            }
+            
+            if (!localitiesDb) {
+              throw new Error('Failed to open Localities DB after ' + MAX_RETRIES + ' retries');
+            }
             
             for await (const [key, localityData] of localitiesDb.iterator()) {
               try {
@@ -167,8 +218,34 @@ module.exports = function() {
           // THIRD: Generate street documents from streets DB
           if (streetsExist) {
             peliasLogger.info('[pass2_document_generator] Starting streets & addresses generation with backpressure handling...');
-            const streetsDb = new Level(STREETS_DB_PATH, { valueEncoding: 'json' });
-            await streetsDb.open();
+            
+            // Retry logic for opening database - may be locked from Pass 1
+            // For large files (e.g. Poland with 8.6M addresses), flush queue can take several minutes
+            let streetsDb = null;
+            let retries = 0;
+            const MAX_RETRIES = 60;
+            
+            while (retries < MAX_RETRIES) {
+              try {
+                streetsDb = new Level(STREETS_DB_PATH, { valueEncoding: 'json' });
+                await streetsDb.open();
+                peliasLogger.info('[pass2_document_generator] Streets DB opened successfully');
+                break;
+              } catch (err) {
+                if (err.code === 'LEVEL_LOCKED' && retries < MAX_RETRIES - 1) {
+                  retries++;
+                  const waitTime = Math.min(1000 * retries, 10000);
+                  peliasLogger.warn('[pass2_document_generator] Streets DB locked, retry %d/%d in %dms...', retries, MAX_RETRIES, waitTime);
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+                } else {
+                  throw err;
+                }
+              }
+            }
+            
+            if (!streetsDb) {
+              throw new Error('Failed to open Streets DB after ' + MAX_RETRIES + ' retries');
+            }
             
             for await (const [key, aggregate] of streetsDb.iterator()) {
               try {
