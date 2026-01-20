@@ -11,7 +11,7 @@
  * 
  * This completely eliminates ES client reuse issues!
  * 
- * @version 2.8.0
+ * @version 2.8.1
  */
 
 const through = require('through2');

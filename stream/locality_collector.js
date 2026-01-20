@@ -11,7 +11,7 @@
  * 
  * In Pass 2, these will be read from LevelDB and imported to Elasticsearch.
  * 
- * @version 2.8.0
+ * @version 2.8.1
  */
 
 const through = require('through2');
@@ -105,7 +105,11 @@ module.exports = function() {
           if (db) {
             peliasLogger.info('[locality_collector] Closing database');
             await db.close();
-            peliasLogger.info('[locality_collector] Database closed successfully');
+            peliasLogger.info('[locality_collector] Database closed, waiting for file lock release...');
+            
+            // Wait additional time for LevelDB to fully release file locks
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            peliasLogger.info('[locality_collector] File lock release wait complete');
           }
           
           // Signal completion via EventEmitter

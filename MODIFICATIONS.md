@@ -2,18 +2,71 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.8.0
+## Version: v2.8.1
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.8.0`
+- **Docker Image**: `tiskel/openstreetmap:v2.8.1`
 
 ---
 
 ## Changelog
+
+### v2.8.1 (2026-01-20)
+
+**Fix: Add explicit file lock release wait after database close**
+
+**Problem**:
+Even with v2.8.0's EventEmitter synchronization, Pass 2 still encountered `LEVEL_LOCKED` errors. Logs showed:
+```
+2026-01-20T08:18:02.661Z - [house_numbers_collector_v2] Flushed batch
+2026-01-20T08:18:02.803Z - [pass2_document_generator] Fatal error: Database is not open
+  cause: IO error: lock /tmp/pelias-house-numbers-aggregation-v2/LOCK: already held by process
+```
+
+Async flush operations from Pass 1 were still executing **during Pass 2**, even after:
+- Waiting for flush queue (`await flushQueue`)
+- Closing database (`await db.close()`)
+- Emitting 'closed' event
+- 30-second delay before Pass 2
+
+**Root Cause**:
+LevelDB's `db.close()` returns immediately when the close operation is initiated, but the actual file lock release happens asynchronously in the background. The OS needs time to:
+1. Flush any pending writes to disk
+2. Release file handles
+3. Remove the LOCK file
+
+**Solution**:
+Add explicit 3-second wait after `db.close()` in all collectors:
+
+```javascript
+await db.close();
+peliasLogger.info('Database closed, waiting for file lock release...');
+
+// Wait for LevelDB to fully release file locks
+await new Promise(resolve => setTimeout(resolve, 3000));
+
+peliasLogger.info('File lock release wait complete');
+collectorEvents.emit('closed');  // Signal AFTER lock release
+```
+
+**Total Wait Time**:
+- 3 collectors × 3 seconds each = 9 seconds (sequential via EventEmitter)
+- Plus 30-second delay between Pass 1 and Pass 2
+- Total: ~39 seconds between Pass 1 finish and Pass 2 start
+
+This ensures database files are fully released before Pass 2 attempts to open them.
+
+**Modified Files**:
+- `stream/house_numbers_collector.js`: 3s wait after db.close() (v2.8.1)
+- `stream/venue_collector.js`: 3s wait after db.close() (v2.8.1)
+- `stream/locality_collector.js`: 3s wait after db.close() (v2.8.1)
+- `stream/document_splitter.js`: Updated version (v2.8.1)
+
+**Result**: File locks are fully released before Pass 2, eliminating `LEVEL_LOCKED` errors.
 
 ### v2.8.0 (2026-01-20)
 

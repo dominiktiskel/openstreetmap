@@ -16,7 +16,7 @@
   - Merge with existing LevelDB data on each flush
   - Final flush at end of stream
   
-  @version 2.8.0
+  @version 2.8.1
   @see: pass2_document_generator.js for Pass 2
 **/
 
@@ -342,7 +342,12 @@ module.exports = function() {
           if (dbOpened) {
             peliasLogger.info('[house_numbers_collector_v2] Closing database...');
             await db.close();
-            peliasLogger.info('[house_numbers_collector_v2] Database closed successfully');
+            peliasLogger.info('[house_numbers_collector_v2] Database closed, waiting for file lock release...');
+            
+            // Wait additional time for LevelDB to fully release file locks
+            // This prevents LEVEL_LOCKED errors in Pass 2
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            peliasLogger.info('[house_numbers_collector_v2] File lock release wait complete');
           }
           
           peliasLogger.info('[house_numbers_collector_v2] Collection complete: %d addresses processed', docCount);
