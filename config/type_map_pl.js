@@ -199,15 +199,15 @@ module.exports = {
   
   'highway': {
     'bus_stop':           { type: 'bus_stop', type_name: 'Przystanek autobusowy', type_aliases: ['Przystanek'] },
-    'platform':           { type: 'platform', type_name: 'Peron', type_aliases: [] },
+    'platform':           { type: 'platform', type_name: 'Przystanek', type_aliases: [] },
     'rest_area':          { type: 'rest_area', type_name: 'Miejsce odpoczynku', type_aliases: ['MOP'] },
     'services':           { type: 'services', type_name: 'Miejsce obsługi podróżnych', type_aliases: ['MOP'] }
   },
   
   'public_transport': {
-    'platform':           { type: 'platform', type_name: 'Peron', type_aliases: [] },
+    'platform':           { type: 'platform', type_name: 'Przystanek', type_aliases: [] },
     'station':            { type: 'station', type_name: 'Dworzec', type_aliases: ['Stacja'] },
-    'stop_position':      { type: 'stop_position', type_name: 'Pozycja przystanku', type_aliases: [] }
+    'stop_position':      { type: 'stop_position', type_name: 'Przystanek', type_aliases: [] }
   },
   
   'shop': {
@@ -252,8 +252,8 @@ module.exports = {
     },
     'car_repair':         {
       type: 'car_repair',
-      type_name: 'Warsztat samochodowy',
-      type_aliases: ['Warsztat', 'Mechanik', 'Serwis samochodowy']
+      type_name: 'Mechanik',
+      type_aliases: ['Warsztat', 'Warsztat samochodowy', 'Serwis samochodowy']
     },
     'pet':                { type: 'pet', type_name: 'Sklep zoologiczny', type_aliases: ['Zoo sklep', 'Karmy dla zwierząt'] },
     'department_store':   { type: 'department_store', type_name: 'Dom towarowy', type_aliases: [] },
