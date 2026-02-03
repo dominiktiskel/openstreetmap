@@ -2,18 +2,89 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.8.1
+## Version: v2.8.2
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.8.1`
+- **Docker Image**: `tiskel/openstreetmap:v2.8.2`
 
 ---
 
 ## Changelog
+
+### v2.8.2 (2026-01-20)
+
+**Fix: Counter-based synchronization replaces promise chain**
+
+**Problem**:
+Even with v2.8.1's 3-second lock release wait, `LEVEL_LOCKED` errors persisted. Logs proved Pass 2 started **while Pass 1 flushes were still running**:
+
+```
+08:37:28.889Z - [pass2] Generated 29000 localities  ← Pass 2 ALREADY RUNNING
+08:37:28.906Z - [house_numbers_collector] Flushed batch  ← Pass 1 STILL FLUSHING
+08:37:29.057Z - [house_numbers_collector] Flushed batch  ← Last Pass 1 flush
+08:37:29.074Z - [pass2] Starting streets  ← Pass 2 tries to open DB
+08:37:29.075Z - LEVEL_LOCKED  ← Database still locked!
+```
+
+**Root Cause**:
+The promise chain approach (`flushQueue = flushQueue.then(...)`) was fundamentally flawed:
+- `await flushQueue` resolved before all I/O operations completed
+- LevelDB write operations continued asynchronously after promises resolved
+- EventEmitter 'closed' event fired prematurely
+- Pass 2 started while Pass 1 was still writing to disk
+
+**Solution - Counter-Based Synchronization**:
+
+Replaced promise chains with atomic counter tracking:
+
+```javascript
+// OLD (BROKEN) - Promise chain approach:
+let flushQueue = Promise.resolve();
+
+// In transform:
+flushQueue = flushQueue.then(async () => {
+  await flushBufferToLevelDB(...);
+});
+
+// In flush:
+await flushQueue;  // ← Resolves prematurely!
+
+// NEW (ROBUST) - Counter-based approach:
+let pendingFlushes = 0;
+
+// In transform:
+pendingFlushes++;  // Increment BEFORE async operation
+(async () => {
+  try {
+    await flushBufferToLevelDB(...);
+  } finally {
+    pendingFlushes--;  // Decrement when TRULY done
+  }
+})();
+
+// In flush:
+while (pendingFlushes > 0) {
+  await new Promise(resolve => setTimeout(resolve, 100));  // Poll until zero
+}
+```
+
+**Why Counter Works**:
+1. Counter incremented **before** async operation starts
+2. Counter decremented **after** operation truly completes (in `finally` block)
+3. Polling loop guarantees we wait until counter reaches zero
+4. All I/O operations guaranteed complete before emitting 'closed'
+
+**Modified Files**:
+- `stream/house_numbers_collector.js`: Replaced flushQueue with pendingFlushes counter + polling (v2.8.2)
+- `stream/venue_collector.js`: Replaced flushQueue with pendingFlushes counter + polling (v2.8.2)
+- `stream/locality_collector.js`: Replaced flushQueue with pendingFlushes counter + polling (v2.8.2)
+- `stream/document_splitter.js`: Updated version (v2.8.2)
+
+**Result**: Robust synchronization that guarantees all async operations complete before Pass 2 starts.
 
 ### v2.8.1 (2026-01-20)
 

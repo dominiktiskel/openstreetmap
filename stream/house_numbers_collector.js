@@ -16,7 +16,7 @@
   - Merge with existing LevelDB data on each flush
   - Final flush at end of stream
   
-  @version 2.8.1
+  @version 2.8.2
   @see: pass2_document_generator.js for Pass 2
 **/
 
@@ -208,8 +208,8 @@ module.exports = function() {
   // In-memory buffer for current batch
   const buffer = new Map();
   
-  // Async flush queue to ensure sequential execution
-  let flushQueue = Promise.resolve();
+  // Counter to track pending flush operations
+  let pendingFlushes = 0;
   
   // EventEmitter to signal when truly closed
   const collectorEvents = new EventEmitter();
@@ -294,15 +294,21 @@ module.exports = function() {
               const bufferToFlush = new Map(buffer);
               buffer.clear();
               
-              // Add flush to queue - ASYNC, doesn't block stream
-              flushQueue = flushQueue.then(async () => {
+              // Increment counter BEFORE starting async operation
+              pendingFlushes++;
+              
+              // Queue flush - counter-based tracking
+              (async () => {
                 try {
                   await ensureDbOpen();
                   await flushBufferToLevelDB(db, bufferToFlush, totalStreetCount);
                 } catch (err) {
                   peliasLogger.error('[house_numbers_collector_v2] Flush error:', err);
+                } finally {
+                  // Decrement counter when operation truly completes
+                  pendingFlushes--;
                 }
-              });
+              })();
             }
           }
         }
@@ -326,10 +332,15 @@ module.exports = function() {
       
       (async () => {
         try {
-          // Wait for all queued flushes to complete
-          peliasLogger.info('[house_numbers_collector_v2] Waiting for async flush queue to complete...');
-          await flushQueue;
-          peliasLogger.info('[house_numbers_collector_v2] All queued flushes completed');
+          // Poll until all pending flushes complete
+          if (pendingFlushes > 0) {
+            peliasLogger.info('[house_numbers_collector_v2] Waiting for %d pending flushes to complete...', pendingFlushes);
+            while (pendingFlushes > 0) {
+              peliasLogger.debug('[house_numbers_collector_v2] Still waiting: %d pending flushes', pendingFlushes);
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          }
+          peliasLogger.info('[house_numbers_collector_v2] All pending flushes completed');
           
           // Flush remaining buffer if not empty
           if (buffer.size > 0) {

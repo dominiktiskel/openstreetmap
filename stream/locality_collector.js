@@ -11,7 +11,7 @@
  * 
  * In Pass 2, these will be read from LevelDB and imported to Elasticsearch.
  * 
- * @version 2.8.1
+ * @version 2.8.2
  */
 
 const through = require('through2');
@@ -36,8 +36,8 @@ module.exports = function() {
   let totalLocalities = 0;
   let dbInitialized = false;
   
-  // Async flush queue to ensure sequential execution
-  let flushQueue = Promise.resolve();
+  // Counter to track pending flush operations
+  let pendingFlushes = 0;
   
   // EventEmitter to signal when truly closed
   const collectorEvents = new EventEmitter();
@@ -81,10 +81,15 @@ module.exports = function() {
       // Final flush
       (async () => {
         try {
-          // Wait for all queued flushes to complete
-          peliasLogger.info('[locality_collector] Waiting for async flush queue to complete...');
-          await flushQueue;
-          peliasLogger.info('[locality_collector] All queued flushes completed');
+          // Poll until all pending flushes complete
+          if (pendingFlushes > 0) {
+            peliasLogger.info('[locality_collector] Waiting for %d pending flushes to complete...', pendingFlushes);
+            while (pendingFlushes > 0) {
+              peliasLogger.debug('[locality_collector] Still waiting: %d pending flushes', pendingFlushes);
+              await new Promise(resolve => setTimeout(resolve, 100));
+            }
+          }
+          peliasLogger.info('[locality_collector] All pending flushes completed');
           
           // Flush remaining buffer if not empty
           if (buffer.length > 0 && db) {
@@ -190,9 +195,15 @@ module.exports = function() {
           const bufferToFlush = buffer.slice();
           buffer = [];
           
-          // Add flush to queue - ASYNC, doesn't block stream
-          flushQueue = flushQueue.then(async () => {
-            if (!db || bufferToFlush.length === 0) return;
+          // Increment counter BEFORE starting async operation
+          pendingFlushes++;
+          
+          // Queue flush - counter-based tracking
+          (async () => {
+            if (!db || bufferToFlush.length === 0) {
+              pendingFlushes--;
+              return;
+            }
             try {
               const batch = db.batch();
               for (const { key, value } of bufferToFlush) {
@@ -202,8 +213,11 @@ module.exports = function() {
               peliasLogger.debug('[locality_collector] Buffer flushed: %d localities', bufferToFlush.length);
             } catch (err) {
               peliasLogger.error('[locality_collector] Error flushing buffer:', err);
+            } finally {
+              // Decrement counter when operation truly completes
+              pendingFlushes--;
             }
-          });
+          })();
         }
         
     } catch (err) {
