@@ -47,7 +47,12 @@ function parseHouseNumber(str) {
 /**
  * Expand a numeric range (e.g., "10-18")
  * Returns null if not a valid range
+ * 
+ * SAFETY: Maximum range size is limited to prevent memory exhaustion
+ * from malformed OSM data (e.g., "1-999999999" would crash the importer)
  */
+const MAX_RANGE_EXPANSION = 100;  // Maximum numbers to generate from a range
+
 function expandNumericRange(str) {
   const parts = str.split('-');
   if (parts.length !== 2) return null;
@@ -63,6 +68,15 @@ function expandNumericRange(str) {
   
   // Calculate range size
   const rangeSize = end.num - start.num + 1;
+  
+  // SAFETY: If range is too large, return only boundaries
+  // This prevents memory exhaustion from malformed data like "1-169220804"
+  if (rangeSize > MAX_RANGE_EXPANSION) {
+    // Return just start and end as strings (no expansion)
+    const startStr = start.suffix ? `${start.num}${start.suffix}` : String(start.num);
+    const endStr = end.suffix ? `${end.num}${end.suffix}` : String(end.num);
+    return [startStr, endStr];
+  }
   
   // For small ranges (≤4 numbers), include all numbers
   const includeAll = rangeSize <= 5;

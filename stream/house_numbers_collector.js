@@ -41,7 +41,7 @@ const BATCH_SIZE = 2500;  // Small batches to prevent OOM with blocking flush
  * Format: "street|city|lat|lon"
  * 
  * Includes city to prevent merging streets with same name in different cities
- * Uses 0.1° precision to avoid splitting long streets
+ * Uses 0.1° precision (~11km) to avoid splitting long streets
  * 
  * City priority:
  * 1. WOF locality (from parent hierarchy) - most reliable
