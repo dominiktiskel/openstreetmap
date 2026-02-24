@@ -16,7 +16,7 @@
   - Merge with existing LevelDB data on each flush
   - Final flush at end of stream
   
-  @version 2.8.2
+  @version 2.9.0
   @see: pass2_document_generator.js for Pass 2
 **/
 
@@ -121,20 +121,34 @@ async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
         let finalAggregate;
         
         if (existingAggregate) {
-          // Merge with existing
-          const existingNumbers = new Set(existingAggregate.numbers);
-          bufferAggregate.numbers.forEach(n => existingNumbers.add(n));
-          
+          // Merge numbers: build Map from existing LevelDB data
+          // Supports old format (string[]) and new format ({num,lat,lon}[])
+          const mergedNums = new Map();
+          for (const item of existingAggregate.numbers) {
+            if (typeof item === 'object' && item.num !== undefined) {
+              mergedNums.set(item.num, { lat: item.lat || null, lon: item.lon || null });
+            } else if (typeof item === 'string') {
+              if (!mergedNums.has(item)) mergedNums.set(item, null);
+            }
+          }
+          // Merge buffer numbers (Map<string, coords|null>) - first occurrence wins
+          for (const [num, coords] of bufferAggregate.numbers.entries()) {
+            if (!mergedNums.has(num)) {
+              mergedNums.set(num, coords);
+            }
+          }
+
           finalAggregate = {
-            numbers: Array.from(existingNumbers).sort(naturalSort),
+            numbers: Array.from(mergedNums.entries())
+              .map(([num, coords]) => ({ num, lat: coords?.lat || null, lon: coords?.lon || null }))
+              .sort((a, b) => naturalSort(a.num, b.num)),
             centroid: {
               lat: existingAggregate.centroid.lat + bufferAggregate.centroid.lat,
               lon: existingAggregate.centroid.lon + bufferAggregate.centroid.lon,
               count: existingAggregate.centroid.count + bufferAggregate.centroid.count
             },
             streetName: existingAggregate.streetName || bufferAggregate.streetName,
-            zip: existingAggregate.zip || bufferAggregate.zip || '',  // Merge zip - prefer existing non-empty
-            // Merge osmAdmin - prefer existing non-empty values
+            zip: existingAggregate.zip || bufferAggregate.zip || '',
             osmAdmin: {
               locality: existingAggregate.osmAdmin?.locality || bufferAggregate.osmAdmin?.locality || '',
               localadmin: existingAggregate.osmAdmin?.localadmin || bufferAggregate.osmAdmin?.localadmin || '',
@@ -148,10 +162,12 @@ async function flushBufferToLevelDB(db, buffer, totalStreetCount) {
         } else {
           // New street
           finalAggregate = {
-            numbers: Array.from(bufferAggregate.numbers).sort(naturalSort),
+            numbers: Array.from(bufferAggregate.numbers.entries())
+              .map(([num, coords]) => ({ num, lat: coords?.lat || null, lon: coords?.lon || null }))
+              .sort((a, b) => naturalSort(a.num, b.num)),
             centroid: bufferAggregate.centroid,
             streetName: bufferAggregate.streetName,
-            zip: bufferAggregate.zip || '',  // Include zip in new aggregate
+            zip: bufferAggregate.zip || '',
             osmAdmin: {
               locality: bufferAggregate.osmAdmin?.locality || '',
               localadmin: bufferAggregate.osmAdmin?.localadmin || '',
@@ -234,41 +250,47 @@ module.exports = function() {
             const streetKey = generateStreetKey(doc);
             docCount++;
             
-            // Get or create aggregate in buffer
-            let aggregate = buffer.get(streetKey);
-            if (!aggregate) {
-              // New street in buffer
-              const initialZip = doc.getAddress('zip') || '';
-              aggregate = {
-                numbers: new Set(),
-                centroid: { lat: 0, lon: 0, count: 0 },
-                streetName: doc.getAddress('street') || '',
-                zip: initialZip,  // Postal code
-                // Store FULL hierarchy from WOF (doc.parent)
-                osmAdmin: {
-                  locality: doc.parent?.locality?.[0] || '',
-                  localadmin: doc.parent?.localadmin?.[0] || '',
-                  county: doc.parent?.county?.[0] || '',
-                  borough: doc.parent?.borough?.[0] || '',
-                  neighbourhood: doc.parent?.neighbourhood?.[0] || '',
-                  region: doc.parent?.region?.[0] || '',
-                  country: doc.parent?.country?.[0] || ''  // From WOF, e.g., "Polska"
-                }
-              };
-              buffer.set(streetKey, aggregate);
-              totalStreetCount++;
-            }
-            
-            // Add house number
-            aggregate.numbers.add(String(houseNumber).trim());
-            
-            // Accumulate coordinates
-            const centroid = doc.getCentroid();
-            if (centroid && centroid.lat && centroid.lon) {
-              aggregate.centroid.lat += centroid.lat;
-              aggregate.centroid.lon += centroid.lon;
-              aggregate.centroid.count++;
-            }
+          // Get or create aggregate in buffer
+          let aggregate = buffer.get(streetKey);
+          if (!aggregate) {
+            // New street in buffer
+            const initialZip = doc.getAddress('zip') || '';
+            aggregate = {
+              numbers: new Map(),  // Map<string, {lat, lon}|null> - per-address coordinates
+              centroid: { lat: 0, lon: 0, count: 0 },
+              streetName: doc.getAddress('street') || '',
+              zip: initialZip,  // Postal code
+              // Store FULL hierarchy from WOF (doc.parent)
+              osmAdmin: {
+                locality: doc.parent?.locality?.[0] || '',
+                localadmin: doc.parent?.localadmin?.[0] || '',
+                county: doc.parent?.county?.[0] || '',
+                borough: doc.parent?.borough?.[0] || '',
+                neighbourhood: doc.parent?.neighbourhood?.[0] || '',
+                region: doc.parent?.region?.[0] || '',
+                country: doc.parent?.country?.[0] || ''  // From WOF, e.g., "Polska"
+              }
+            };
+            buffer.set(streetKey, aggregate);
+            totalStreetCount++;
+          }
+          
+          // Add house number with individual coordinates (first occurrence wins)
+          const numStr = String(houseNumber).trim();
+          const centroid = doc.getCentroid();
+          if (!aggregate.numbers.has(numStr)) {
+            const coords = (centroid && centroid.lat && centroid.lon) ?
+              { lat: centroid.lat, lon: centroid.lon } :
+              null;
+            aggregate.numbers.set(numStr, coords);
+          }
+          
+          // Accumulate coordinates for street centroid (always, even for duplicate numbers)
+          if (centroid && centroid.lat && centroid.lon) {
+            aggregate.centroid.lat += centroid.lat;
+            aggregate.centroid.lon += centroid.lon;
+            aggregate.centroid.count++;
+          }
             
             // Update streetName if not set
             if (!aggregate.streetName && doc.getAddress('street')) {

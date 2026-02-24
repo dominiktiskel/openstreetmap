@@ -30,7 +30,7 @@
  * This is the ONLY place where Elasticsearch client is created,
  * completely eliminating ES client reuse issues!
  * 
- * @version 2.7.5 - Reduced batch sizes to prevent OOM with blocking flush
+ * @version 2.9.0 - Per-address coordinates instead of street centroid
  */
 
 const through = require('through2');
@@ -283,7 +283,7 @@ module.exports = function() {
               
               // Add house numbers to addendum
               streetDoc.setAddendum('osm', {
-                house_numbers: aggregate.numbers.join(',')
+                house_numbers: data.numbers.map(item => typeof item === 'object' ? item.num : item).join(',')
               });
               
               // Copy FULL admin hierarchy from aggregate (NO WOF lookup needed!)
@@ -359,13 +359,19 @@ module.exports = function() {
               // ALSO generate individual address documents for each house number
               // This allows searching for specific addresses like "Szkutnicza 10"
               if (data.numbers && data.numbers.length > 0) {
-                for (const houseNumber of data.numbers) {
+                for (const houseNumItem of data.numbers) {
+                  let houseNumber;
                   try {
-                    const addressId = `address_${streetName.toLowerCase().replace(/\s+/g, '_')}_${houseNumber}_${avgLat.toFixed(6)}_${avgLon.toFixed(6)}`;
+                    // Support old format (string) and new format ({num, lat, lon})
+                    houseNumber = typeof houseNumItem === 'object' ? houseNumItem.num : houseNumItem;
+                    const addrLat = (typeof houseNumItem === 'object' && houseNumItem.lat) ? houseNumItem.lat : avgLat;
+                    const addrLon = (typeof houseNumItem === 'object' && houseNumItem.lon) ? houseNumItem.lon : avgLon;
+
+                    const addressId = `address_${streetName.toLowerCase().replace(/\s+/g, '_')}_${houseNumber}_${addrLat.toFixed(6)}_${addrLon.toFixed(6)}`;
                     
                     const addressDoc = new Document('openstreetmap', 'address', addressId)
                       .setName('default', `${streetName} ${houseNumber}`)
-                      .setCentroid({ lat: avgLat, lon: avgLon })  // Use street centroid
+                      .setCentroid({ lat: addrLat, lon: addrLon })  // Use individual address coordinates
                       .setAddress('street', streetName)
                       .setAddress('number', houseNumber);
                     
