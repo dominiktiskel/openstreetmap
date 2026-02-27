@@ -11,8 +11,9 @@ const peliasLogger = require('pelias-logger').get('openstreetmap');
 // Load all type maps at module initialization (cached)
 const typeMaps = {
   'pl': require('../config/type_map_pl'),
-  'en': require('../config/type_map_en')
-  // Add more languages as needed: 'de', 'fr', 'es', etc.
+  'en': require('../config/type_map_en'),
+  'de': require('../config/type_map_de'),
+  'es': require('../config/type_map_es')
 };
 
 // Load country to language mapping
@@ -21,7 +22,9 @@ const countryLanguageMap = require('../config/country_language_map');
 // Fallback type data for unmapped POI types (language-agnostic)
 const FALLBACK_TYPE_DATA = {
   'pl': { type: 'other', type_name: 'Pozostałe', type_aliases: [] },
-  'en': { type: 'other', type_name: 'Other', type_aliases: [] }
+  'en': { type: 'other', type_name: 'Other', type_aliases: [] },
+  'de': { type: 'other', type_name: 'Sonstiges', type_aliases: [] },
+  'es': { type: 'other', type_name: 'Otro', type_aliases: [] }
 };
 
 module.exports = function() {
