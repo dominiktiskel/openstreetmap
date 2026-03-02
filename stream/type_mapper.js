@@ -16,15 +16,51 @@ const typeMaps = {
   'es': require('../config/type_map_es')
 };
 
-// Load country to language mapping
+// Load country to language mapping (fallback — uses WOF country name)
 const countryLanguageMap = require('../config/country_language_map');
+
+// ISO 3166-1 alpha-2 country code → language code
+// Used as primary language source when countryCode is set in pelias.json import config
+const isoLanguageMap = {
+  'PL': 'pl',
+  'DE': 'de', 'AT': 'de', 'CH': 'de', 'LI': 'de',
+  'GB': 'en', 'US': 'en', 'AU': 'en', 'NZ': 'en', 'IE': 'en',
+  'CA': 'en', 'ZA': 'en', 'SG': 'en', 'JM': 'en',
+  'ES': 'es', 'MX': 'es', 'AR': 'es', 'CO': 'es', 'CL': 'es',
+  'PE': 'es', 'VE': 'es', 'EC': 'es', 'BO': 'es', 'PY': 'es',
+  'UY': 'es', 'CR': 'es', 'PA': 'es', 'DO': 'es', 'HN': 'es',
+  'NI': 'es', 'SV': 'es', 'GT': 'es', 'CU': 'es',
+  'FR': 'fr', 'BE': 'fr', 'MC': 'fr', 'LU': 'fr',
+  'IT': 'it', 'SM': 'it', 'VA': 'it',
+  'PT': 'pt', 'BR': 'pt',
+  'NL': 'nl',
+  'DK': 'da',
+  'NO': 'no',
+  'SE': 'sv',
+  'FI': 'fi',
+  'LT': 'lt',
+  'LV': 'lv',
+  'EE': 'et',
+  'RU': 'ru',
+  'UA': 'uk',
+  'IL': 'he',
+  'TR': 'tr',
+  'JP': 'ja',
+  'CN': 'zh', 'TW': 'zh',
+  'KR': 'ko',
+  'KG': 'ky',
+};
 
 // Fallback type data for unmapped POI types (language-agnostic)
 const FALLBACK_TYPE_DATA = {
   'pl': { type: 'other', type_name: 'Pozostałe', type_aliases: [] },
   'en': { type: 'other', type_name: 'Other', type_aliases: [] },
   'de': { type: 'other', type_name: 'Sonstiges', type_aliases: [] },
-  'es': { type: 'other', type_name: 'Otro', type_aliases: [] }
+  'es': { type: 'other', type_name: 'Otro', type_aliases: [] },
+  'fr': { type: 'other', type_name: 'Autre', type_aliases: [] },
+  'it': { type: 'other', type_name: 'Altro', type_aliases: [] },
+  'pt': { type: 'other', type_name: 'Outro', type_aliases: [] },
+  'nl': { type: 'other', type_name: 'Overig', type_aliases: [] },
 };
 
 module.exports = function() {
@@ -41,13 +77,17 @@ module.exports = function() {
         return next(null, doc);
       }
 
-      // Get country from document (populated by adminLookup)
-      // Note: adminLookup must run BEFORE typeMapper in the pipeline
+      // Primary: ISO code from import config (set in pelias.json per PBF file)
+      const sourceIso = doc.getMeta('source_country_code');
+      // Fallback: country name from WOF admin lookup (e.g. "Polska", "Deutschland")
       const country = doc.parent && doc.parent.country && doc.parent.country[0];
-      
-      // Determine language code based on country
-      const languageCode = countryLanguageMap[country] || countryLanguageMap._default;
-      
+
+      // Determine language code: ISO map first, then WOF country name map, then default
+      const languageCode =
+        (sourceIso && isoLanguageMap[sourceIso]) ||
+        countryLanguageMap[country] ||
+        countryLanguageMap._default;
+
       // Select appropriate type mapping (fallback to English if not available)
       const typeMapping = typeMaps[languageCode] || typeMaps.en;
       

@@ -69,6 +69,11 @@ module.exports = function(){
       // Store osm tags as a property inside _meta
       doc.setMeta( 'tags', item.tags || {} );
 
+      // Store source country code (ISO 3166-1 alpha-2) if provided by import config
+      if ( item.countryCode ) {
+        doc.setMeta( 'source_country_code', item.countryCode );
+      }
+
       // Push instance of Document downstream
       this.push( doc );
     }
