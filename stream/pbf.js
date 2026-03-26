@@ -49,7 +49,11 @@ function config(opts){
     if(opts.importVenues){
       opts.tags = features.tags.concat(features.venue_tags);
     } else {
-      opts.tags = features.tags;
+      opts.tags = features.tags.slice();
+    }
+    // add highway street tags when enabled for this import entry
+    if(opts.importHighwayStreets){
+      opts.tags = opts.tags.concat(features.highway_street_tags);
     }
   }
   return opts;

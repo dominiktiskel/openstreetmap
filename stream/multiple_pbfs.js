@@ -12,18 +12,21 @@ function createCombinedStream(){
     var conf = {
       file: path.join(defaultPath.datapath, importObject.filename),
       leveldb: defaultPath.leveldbpath,
-      importVenues: importObject.importVenues
+      importVenues: importObject.importVenues,
+      importHighwayStreets: importObject.importHighwayStreets || false
     };
     var countryCode = importObject.countryCode || null;
+    var importHighwayStreets = importObject.importHighwayStreets || false;
 
     fullStream.append(function(next){
-      logger.info('Creating read stream for: ' + conf.file + (countryCode ? ' [' + countryCode + ']' : ''));
+      logger.info('Creating read stream for: ' + conf.file + (countryCode ? ' [' + countryCode + ']' : '') + (importHighwayStreets ? ' [highway streets]' : ''));
       var parser = pbf.parser(conf);
-      if (!countryCode) {
+      if (!countryCode && !importHighwayStreets) {
         return next(parser);
       }
       var tagger = through.obj(function(item, enc, callback) {
-        item.countryCode = countryCode;
+        if (countryCode) { item.countryCode = countryCode; }
+        item.importHighwayStreets = importHighwayStreets;
         this.push(item);
         callback();
       });

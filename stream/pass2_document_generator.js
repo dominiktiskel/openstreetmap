@@ -252,11 +252,11 @@ module.exports = function() {
                 // Street aggregate processing
                 const data = aggregate;
               
-              // Validate aggregate
-              if (!aggregate || !aggregate.numbers || aggregate.numbers.length === 0) {
+              // Validate aggregate - need at least a centroid (from address OR highway way)
+              if (!aggregate) {
                 continue;
               }
-              
+
               if (!aggregate.centroid || aggregate.centroid.count === 0) {
                 peliasLogger.debug('[pass2_document_generator] Skipping street (no centroid): %s', key);
                 continue;
@@ -281,10 +281,12 @@ module.exports = function() {
                 .setName('default', streetName)
                 .setCentroid({ lat: avgLat, lon: avgLon });
               
-              // Add house numbers to addendum
-              streetDoc.setAddendum('osm', {
-                house_numbers: data.numbers.map(item => typeof item === 'object' ? item.num : item).join(',')
-              });
+              // Add house numbers to addendum (may be empty for highway-only streets)
+              if (data.numbers && data.numbers.length > 0) {
+                streetDoc.setAddendum('osm', {
+                  house_numbers: data.numbers.map(item => typeof item === 'object' ? item.num : item).join(',')
+                });
+              }
               
               // Copy FULL admin hierarchy from aggregate (NO WOF lookup needed!)
               if (aggregate.osmAdmin) {
@@ -356,8 +358,7 @@ module.exports = function() {
               }
               streetsGenerated++;
               
-              // ALSO generate individual address documents for each house number
-              // This allows searching for specific addresses like "Szkutnicza 10"
+              // Generate individual address documents for each house number (when present)
               if (data.numbers && data.numbers.length > 0) {
                 for (const houseNumItem of data.numbers) {
                   let houseNumber;

@@ -10,6 +10,20 @@ const tags = [
   'addr:housenumber+addr:place'  // @ref https://github.com/pelias/pelias/issues/787#issuecomment-477137803
 ];
 
+// tags for importing highway streets (named roads without house numbers)
+// only used when importHighwayStreets is enabled in pelias.json import entry
+const highway_street_tags = [
+  'highway~residential+name',
+  'highway~tertiary+name',
+  'highway~secondary+name',
+  'highway~primary+name',
+  'highway~living_street+name',
+  'highway~unclassified+name',
+  'highway~pedestrian+name',
+  'highway~service+name',
+  'highway~road+name'
+];
+
 // tags corresponding to venues
 const venue_tags = [
   'amenity+name',
@@ -54,4 +68,4 @@ const venue_tags = [
   'healthcare+name'
 ];
 
-module.exports = {tags,venue_tags};
+module.exports = {tags, venue_tags, highway_street_tags};

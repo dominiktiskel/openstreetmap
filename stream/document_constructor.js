@@ -74,6 +74,11 @@ module.exports = function(){
         doc.setMeta( 'source_country_code', item.countryCode );
       }
 
+      // Store highway streets import flag if provided by import config
+      if ( item.importHighwayStreets ) {
+        doc.setMeta( 'importHighwayStreets', true );
+      }
+
       // Push instance of Document downstream
       this.push( doc );
     }

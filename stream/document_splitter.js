@@ -43,8 +43,8 @@ module.exports = function() {
         
         let canContinue = true;
         
-        // Addresses with street → street collector (aggregation)
-        if (layer === 'address' && hasStreet) {
+        // Addresses with street OR highway streets → street collector (aggregation)
+        if ((layer === 'address' && hasStreet) || layer === 'street') {
           toStreetCollector++;
           canContinue = streetCollector.write(doc);
         }
@@ -73,7 +73,7 @@ module.exports = function() {
         
         // Handle backpressure - wait for drain if buffer is full
         if (!canContinue) {
-          const collector = layer === 'address' && hasStreet ? streetCollector :
+          const collector = ((layer === 'address' && hasStreet) || layer === 'street') ? streetCollector :
                            layer === 'locality' ? localityCollector :
                            venueCollector;
           collector.once('drain', next);

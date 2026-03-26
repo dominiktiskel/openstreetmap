@@ -35,6 +35,7 @@ streams.addressesWithoutStreet = require('./addresses_without_street');
 streams.adminLookup = require('pelias-wof-admin-lookup').create;
 streams.addressExtractor = require('./address_extractor');
 streams.localityExtractor = require('./locality_extractor');
+streams.streetExtractor = require('./street_extractor');
 streams.houseNumbersCollector = require('./house_numbers_collector');
 streams.documentSplitter = require('./document_splitter');
 streams.pass2DocumentGenerator = require('./pass2_document_generator');
@@ -64,6 +65,7 @@ streams.importPass1 = function(callback){
     .pipe( streams.tagMapper() )
     .pipe( streams.addressExtractor() )
     .pipe( streams.localityExtractor() )
+    .pipe( streams.streetExtractor() )
     .pipe( streams.blacklistStream() )
     .pipe( streams.adminLookup() )  // WOF lookup in Pass 1! (BEFORE typeMapper)
     .pipe( streams.categoryMapper( categoryDefaults ) )

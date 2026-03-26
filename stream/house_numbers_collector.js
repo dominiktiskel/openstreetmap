@@ -243,13 +243,22 @@ module.exports = function() {
     // Transform function - collect to buffer
     function(doc, enc, next) {
       try {
-        // Only process address documents
-        if (doc.getLayer() === 'address') {
-          const houseNumber = doc.getAddress('number');
-          if (houseNumber) {
-            const streetKey = generateStreetKey(doc);
-            docCount++;
-            
+        const layer = doc.getLayer();
+        // Process address documents (with house number) AND highway street documents (layer='street')
+        const isAddress = layer === 'address';
+        const isHighwayStreet = layer === 'street';
+
+        if (isAddress || isHighwayStreet) {
+          const houseNumber = isAddress ? doc.getAddress('number') : null;
+
+          // For address docs, require a house number; for street docs, no house number needed
+          if (isAddress && !houseNumber) {
+            return next();
+          }
+
+          const streetKey = generateStreetKey(doc);
+          docCount++;
+
           // Get or create aggregate in buffer
           let aggregate = buffer.get(streetKey);
           if (!aggregate) {
@@ -268,70 +277,92 @@ module.exports = function() {
                 borough: doc.parent?.borough?.[0] || '',
                 neighbourhood: doc.parent?.neighbourhood?.[0] || '',
                 region: doc.parent?.region?.[0] || '',
-                country: doc.parent?.country?.[0] || ''  // From WOF, e.g., "Polska"
+                country: doc.parent?.country?.[0] || ''  // From WOF, e.g., "United Kingdom"
               }
             };
             buffer.set(streetKey, aggregate);
             totalStreetCount++;
           }
-          
+
           // Add house number with individual coordinates (first occurrence wins)
-          const numStr = String(houseNumber).trim();
-          const centroid = doc.getCentroid();
-          if (!aggregate.numbers.has(numStr)) {
-            const coords = (centroid && centroid.lat && centroid.lon) ?
-              { lat: centroid.lat, lon: centroid.lon } :
-              null;
-            aggregate.numbers.set(numStr, coords);
+          // For highway street docs there is no house number - only centroid is recorded
+          if (houseNumber) {
+            const numStr = String(houseNumber).trim();
+            const centroid = doc.getCentroid();
+            if (!aggregate.numbers.has(numStr)) {
+              const coords = (centroid && centroid.lat && centroid.lon) ?
+                { lat: centroid.lat, lon: centroid.lon } :
+                null;
+              aggregate.numbers.set(numStr, coords);
+            }
+
+            // Accumulate coordinates for street centroid
+            if (centroid && centroid.lat && centroid.lon) {
+              aggregate.centroid.lat += centroid.lat;
+              aggregate.centroid.lon += centroid.lon;
+              aggregate.centroid.count++;
+            }
+          } else {
+            // Highway street doc: accumulate centroid, no house number
+            const centroid = doc.getCentroid();
+            if (centroid && centroid.lat && centroid.lon) {
+              aggregate.centroid.lat += centroid.lat;
+              aggregate.centroid.lon += centroid.lon;
+              aggregate.centroid.count++;
+            }
           }
-          
-          // Accumulate coordinates for street centroid (always, even for duplicate numbers)
-          if (centroid && centroid.lat && centroid.lon) {
-            aggregate.centroid.lat += centroid.lat;
-            aggregate.centroid.lon += centroid.lon;
-            aggregate.centroid.count++;
+
+          // Update streetName if not set
+          if (!aggregate.streetName && doc.getAddress('street')) {
+            aggregate.streetName = doc.getAddress('street');
           }
-            
-            // Update streetName if not set
-            if (!aggregate.streetName && doc.getAddress('street')) {
-              aggregate.streetName = doc.getAddress('street');
-            }
-            
-            // Update zip if not set
-            if (!aggregate.zip && doc.getAddress('zip')) {
-              aggregate.zip = doc.getAddress('zip');
-            }
-            
-            // Periodic batch write - ASYNC (non-blocking)
-            if (docCount % BATCH_SIZE === 0) {
-              batchNumber++;
-              peliasLogger.info(
-                '[house_numbers_collector_v2] Processing batch #%d (%d addresses, %d streets in buffer)',
-                batchNumber,
-                docCount,
-                buffer.size
-              );
-              
-              // Create a copy of current buffer for flushing
-              const bufferToFlush = new Map(buffer);
-              buffer.clear();
-              
-              // Increment counter BEFORE starting async operation
-              pendingFlushes++;
-              
-              // Queue flush - counter-based tracking
-              (async () => {
-                try {
-                  await ensureDbOpen();
-                  await flushBufferToLevelDB(db, bufferToFlush, totalStreetCount);
-                } catch (err) {
-                  peliasLogger.error('[house_numbers_collector_v2] Flush error:', err);
-                } finally {
-                  // Decrement counter when operation truly completes
-                  pendingFlushes--;
-                }
-              })();
-            }
+
+          // Update zip if not set
+          if (!aggregate.zip && doc.getAddress('zip')) {
+            aggregate.zip = doc.getAddress('zip');
+          }
+
+          // Fill in osmAdmin from WOF hierarchy if not yet populated
+          if (doc.parent) {
+            const osmAdmin = aggregate.osmAdmin;
+            if (!osmAdmin.locality) osmAdmin.locality = doc.parent?.locality?.[0] || '';
+            if (!osmAdmin.localadmin) osmAdmin.localadmin = doc.parent?.localadmin?.[0] || '';
+            if (!osmAdmin.county) osmAdmin.county = doc.parent?.county?.[0] || '';
+            if (!osmAdmin.borough) osmAdmin.borough = doc.parent?.borough?.[0] || '';
+            if (!osmAdmin.neighbourhood) osmAdmin.neighbourhood = doc.parent?.neighbourhood?.[0] || '';
+            if (!osmAdmin.region) osmAdmin.region = doc.parent?.region?.[0] || '';
+            if (!osmAdmin.country) osmAdmin.country = doc.parent?.country?.[0] || '';
+          }
+
+          // Periodic batch write - ASYNC (non-blocking)
+          if (docCount % BATCH_SIZE === 0) {
+            batchNumber++;
+            peliasLogger.info(
+              '[house_numbers_collector_v2] Processing batch #%d (%d docs, %d streets in buffer)',
+              batchNumber,
+              docCount,
+              buffer.size
+            );
+
+            // Create a copy of current buffer for flushing
+            const bufferToFlush = new Map(buffer);
+            buffer.clear();
+
+            // Increment counter BEFORE starting async operation
+            pendingFlushes++;
+
+            // Queue flush - counter-based tracking
+            (async () => {
+              try {
+                await ensureDbOpen();
+                await flushBufferToLevelDB(db, bufferToFlush, totalStreetCount);
+              } catch (err) {
+                peliasLogger.error('[house_numbers_collector_v2] Flush error:', err);
+              } finally {
+                // Decrement counter when operation truly completes
+                pendingFlushes--;
+              }
+            })();
           }
         }
         
