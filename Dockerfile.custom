@@ -32,6 +32,9 @@ RUN rm -rf node_modules/pelias-wof-admin-lookup && \
 # Add all openstreetmap code (including bin/, stream/, etc.)
 COPY openstreetmap ${WORKDIR}
 
+# Ensure bin/ scripts are executable
+RUN chmod +x ${WORKDIR}/bin/*
+
 # Run as the pelias user
 USER pelias
 
