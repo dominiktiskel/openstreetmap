@@ -499,32 +499,31 @@ function generateVenueDocument(venueData) {
       venueDoc.setNameAlias('default', venueData.name_with_street.trim());
     }
     
-    // Add type name as name alias (e.g., "Gabinet stomatologiczny")
+    // Add type name to separate 'type' field (lower boost than name.default in queries)
+    // so venues with the search term in their actual name rank higher than type-only matches
     if (venueData.osm_type_name && venueData.osm_type_name.trim()) {
       const typeName = venueData.osm_type_name.trim();
-      venueDoc.setNameAlias('default', typeName);
+      venueDoc.setNameAlias('type', typeName);
       
-      // Also add type_name + street combination (e.g., "Gabinet stomatologiczny Główna")
       if (venueData.address_parts && venueData.address_parts.street) {
         const street = venueData.address_parts.street.trim();
         if (street) {
-          venueDoc.setNameAlias('default', `${typeName} ${street}`);
+          venueDoc.setNameAlias('type', `${typeName} ${street}`);
         }
       }
     }
     
-    // Add all type aliases as name aliases (e.g., "Dentysta", "Stomatolog")
+    // Add all type aliases to 'type' field (e.g., "Dentysta", "Stomatolog")
     if (venueData.osm_type_aliases && Array.isArray(venueData.osm_type_aliases)) {
       venueData.osm_type_aliases.forEach(alias => {
         if (alias && alias.trim()) {
           const aliasName = alias.trim();
-          venueDoc.setNameAlias('default', aliasName);
+          venueDoc.setNameAlias('type', aliasName);
           
-          // Also add alias + street combination (e.g., "Dentysta Główna", "Mechanik Sułowska")
           if (venueData.address_parts && venueData.address_parts.street) {
             const street = venueData.address_parts.street.trim();
             if (street) {
-              venueDoc.setNameAlias('default', `${aliasName} ${street}`);
+              venueDoc.setNameAlias('type', `${aliasName} ${street}`);
             }
           }
         }
