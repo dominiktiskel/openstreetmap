@@ -72,6 +72,7 @@ const mapping = {
   museum_type: { _score: 2000 },
   opening_hours: { _score: 1000 },
   operator: { _score: 1000 },
+  brand: { _score: 3000 },
   fee: { _score: 2000 },
 
   // closed and abandoned places

@@ -239,6 +239,16 @@ module.exports = function() {
           }
         }
         
+        // Store brand/operator for searchable name aliases (Pass 2 adds them to name.default)
+        if (tags) {
+          if (tags.brand && tags.brand.trim() && tags.brand.trim() !== originalName) {
+            venueData.brand = tags.brand.trim();
+          }
+          if (tags.operator && tags.operator.trim() && tags.operator.trim() !== originalName) {
+            venueData.operator_name = tags.operator.trim();
+          }
+        }
+        
         // Also keep osmAdmin for backward compatibility
         if (doc.address_parts) {
           venueData.osmAdmin = {

@@ -50,6 +50,70 @@ const STREETS_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggre
 const VENUES_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-venues-v2');
 const LOCALITIES_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-localities');
 
+const NEAREST_STREET_RADIUS_M = 150;
+
+/**
+ * Spatial grid index for fast nearest-street lookup.
+ * Divides the Earth into ~111m x ~70m cells (at 50N latitude).
+ */
+class StreetSpatialIndex {
+  constructor() {
+    this.grid = new Map();
+    this.cellSize = 0.001; // ~111m latitude, ~70m longitude at 50N
+    this.pointCount = 0;
+  }
+
+  _cellKey(lat, lon) {
+    const latCell = Math.floor(lat / this.cellSize);
+    const lonCell = Math.floor(lon / this.cellSize);
+    return `${latCell}:${lonCell}`;
+  }
+
+  addStreet(streetName, lat, lon) {
+    const key = this._cellKey(lat, lon);
+    if (!this.grid.has(key)) {
+      this.grid.set(key, []);
+    }
+    this.grid.get(key).push({ streetName, lat, lon });
+    this.pointCount++;
+  }
+
+  _haversineM(lat1, lon1, lat2, lon2) {
+    const R = 6371000;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  findNearest(lat, lon, maxDistanceM) {
+    const latCell = Math.floor(lat / this.cellSize);
+    const lonCell = Math.floor(lon / this.cellSize);
+
+    let best = null;
+    let bestDist = maxDistanceM;
+
+    for (let dLat = -1; dLat <= 1; dLat++) {
+      for (let dLon = -1; dLon <= 1; dLon++) {
+        const key = `${latCell + dLat}:${lonCell + dLon}`;
+        const cell = this.grid.get(key);
+        if (!cell) continue;
+        for (const entry of cell) {
+          const dist = this._haversineM(lat, lon, entry.lat, entry.lon);
+          if (dist < bestDist) {
+            bestDist = dist;
+            best = entry;
+          }
+        }
+      }
+    }
+
+    return best ? { streetName: best.streetName, distance: bestDist } : null;
+  }
+}
+
 module.exports = function() {
   let enabled = ENABLE_AGGREGATION && IMPORT_STREETS;
   let streetsGenerated = 0;
@@ -89,6 +153,7 @@ module.exports = function() {
       
       const self = this;
       let venuesGenerated = 0;
+      let venuesWithNearestStreet = 0;
       let addressesGenerated = 0;  // Track address documents
       let localitiesGenerated = 0;  // Track locality documents
       let backpressureEvents = 0;  // Track backpressure events
@@ -96,6 +161,53 @@ module.exports = function() {
       // Async iteration through BOTH LevelDB databases
       (async () => {
         try {
+          // PHASE 0: Build spatial index of streets for nearest-street lookup
+          const streetIndex = new StreetSpatialIndex();
+          if (streetsExist) {
+            peliasLogger.info('[pass2_document_generator] Building street spatial index...');
+            let indexDb = null;
+            let retries = 0;
+            const MAX_IDX_RETRIES = 60;
+            while (retries < MAX_IDX_RETRIES) {
+              try {
+                indexDb = new Level(STREETS_DB_PATH, { valueEncoding: 'json' });
+                await indexDb.open();
+                break;
+              } catch (err) {
+                if (err.code === 'LEVEL_LOCKED' && retries < MAX_IDX_RETRIES - 1) {
+                  retries++;
+                  const waitTime = Math.min(1000 * retries, 10000);
+                  peliasLogger.warn('[pass2_document_generator] Streets DB locked (index build), retry %d/%d in %dms...', retries, MAX_IDX_RETRIES, waitTime);
+                  await new Promise(resolve => setTimeout(resolve, waitTime));
+                } else {
+                  throw err;
+                }
+              }
+            }
+            if (indexDb) {
+              for await (const [key, aggregate] of indexDb.iterator()) {
+                if (!aggregate || !aggregate.centroid || aggregate.centroid.count === 0) continue;
+                const streetName = aggregate.streetName || key.split('|')[0];
+                if (!streetName) continue;
+
+                if (aggregate.numbers && Array.isArray(aggregate.numbers)) {
+                  for (const item of aggregate.numbers) {
+                    if (typeof item === 'object' && item.lat && item.lon) {
+                      streetIndex.addStreet(streetName, item.lat, item.lon);
+                    }
+                  }
+                }
+
+                const avgLat = aggregate.centroid.lat / aggregate.centroid.count;
+                const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
+                streetIndex.addStreet(streetName, avgLat, avgLon);
+              }
+              await indexDb.close();
+              peliasLogger.info('[pass2_document_generator] Street spatial index ready: %d points in %d cells',
+                streetIndex.pointCount, streetIndex.grid.size);
+            }
+          }
+
           // FIRST: Generate venue documents from venues DB
           if (venuesExist) {
             peliasLogger.info('[pass2_document_generator] Starting venues generation with backpressure handling...');
@@ -130,8 +242,12 @@ module.exports = function() {
             
             for await (const [key, venueData] of venuesDb.iterator()) {
               try {
-                const venueDoc = generateVenueDocument(venueData);
+                const venueDoc = generateVenueDocument(venueData, streetIndex);
                 if (venueDoc) {
+                  if (venueDoc._nearestStreetAssigned) {
+                    venuesWithNearestStreet++;
+                    delete venueDoc._nearestStreetAssigned;
+                  }
                   // Push with backpressure handling
                   if (!self.push(venueDoc)) {
                     backpressureEvents++;
@@ -153,7 +269,7 @@ module.exports = function() {
             }
             
             await venuesDb.close();
-            peliasLogger.info('[pass2_document_generator] Venues complete: %d documents', venuesGenerated);
+            peliasLogger.info('[pass2_document_generator] Venues complete: %d documents (%d with nearest-street assigned)', venuesGenerated, venuesWithNearestStreet);
           }
           
           // SECOND: Generate locality documents from localities DB
@@ -431,7 +547,7 @@ module.exports = function() {
           );
           peliasLogger.info('[pass2_document_generator]   - %d streets', streetsGenerated);
           peliasLogger.info('[pass2_document_generator]   - %d addresses', addressesGenerated);
-          peliasLogger.info('[pass2_document_generator]   - %d venues/POI', venuesGenerated);
+          peliasLogger.info('[pass2_document_generator]   - %d venues/POI (%d with nearest-street)', venuesGenerated, venuesWithNearestStreet);
           peliasLogger.info('[pass2_document_generator]   - %d localities', localitiesGenerated);
           peliasLogger.info('[pass2_document_generator]   - %d backpressure events (pauses)', backpressureEvents);
           peliasLogger.info('[pass2_document_generator] ========================================');
@@ -471,9 +587,11 @@ module.exports = function() {
 };
 
 /**
- * Generate a venue/POI document from LevelDB data
+ * Generate a venue/POI document from LevelDB data.
+ * @param {Object} venueData - venue data from LevelDB
+ * @param {StreetSpatialIndex} streetIndex - spatial index for nearest-street lookup
  */
-function generateVenueDocument(venueData) {
+function generateVenueDocument(venueData, streetIndex) {
   try {
     // Validate venue data
     if (!venueData || !venueData.id || !venueData.layer) {
@@ -483,6 +601,19 @@ function generateVenueDocument(venueData) {
     if (!venueData.lat || !venueData.lon) {
       peliasLogger.debug('[pass2_document_generator] Skipping venue (no coordinates): %s', venueData.id);
       return null;
+    }
+    
+    // Determine effective street: from OSM data or via nearest-street lookup
+    const hasOsmStreet = venueData.address_parts && venueData.address_parts.street && venueData.address_parts.street.trim();
+    let effectiveStreet = hasOsmStreet ? venueData.address_parts.street.trim() : null;
+    let nearestStreetAssigned = false;
+
+    if (!effectiveStreet && streetIndex && streetIndex.pointCount > 0) {
+      const nearest = streetIndex.findNearest(venueData.lat, venueData.lon, NEAREST_STREET_RADIUS_M);
+      if (nearest) {
+        effectiveStreet = nearest.streetName;
+        nearestStreetAssigned = true;
+      }
     }
     
     // Create venue document
@@ -499,17 +630,22 @@ function generateVenueDocument(venueData) {
       venueDoc.setNameAlias('default', venueData.name_with_street.trim());
     }
     
+    // Add brand/operator as searchable name aliases when they differ from the primary name
+    if (venueData.brand) {
+      venueDoc.setNameAlias('default', venueData.brand);
+    }
+    if (venueData.operator_name) {
+      venueDoc.setNameAlias('default', venueData.operator_name);
+    }
+    
     // Add type name to separate 'type' field (lower boost than name.default in queries)
     // so venues with the search term in their actual name rank higher than type-only matches
     if (venueData.osm_type_name && venueData.osm_type_name.trim()) {
       const typeName = venueData.osm_type_name.trim();
       venueDoc.setNameAlias('type', typeName);
       
-      if (venueData.address_parts && venueData.address_parts.street) {
-        const street = venueData.address_parts.street.trim();
-        if (street) {
-          venueDoc.setNameAlias('type', `${typeName} ${street}`);
-        }
+      if (effectiveStreet) {
+        venueDoc.setNameAlias('type', `${typeName} ${effectiveStreet}`);
       }
     }
     
@@ -520,11 +656,8 @@ function generateVenueDocument(venueData) {
           const aliasName = alias.trim();
           venueDoc.setNameAlias('type', aliasName);
           
-          if (venueData.address_parts && venueData.address_parts.street) {
-            const street = venueData.address_parts.street.trim();
-            if (street) {
-              venueDoc.setNameAlias('type', `${aliasName} ${street}`);
-            }
+          if (effectiveStreet) {
+            venueDoc.setNameAlias('type', `${aliasName} ${effectiveStreet}`);
           }
         }
       });
@@ -537,7 +670,7 @@ function generateVenueDocument(venueData) {
       });
     }
     
-    // Restore full address parts if available (street, number, zip)
+    // Set address_parts: use OSM data when available, otherwise nearest-street
     if (venueData.address_parts) {
       if (venueData.address_parts.street && venueData.address_parts.street.trim()) {
         venueDoc.setAddress('street', venueData.address_parts.street.trim());
@@ -548,6 +681,10 @@ function generateVenueDocument(venueData) {
       if (venueData.address_parts.zip && venueData.address_parts.zip.trim()) {
         venueDoc.setAddress('zip', venueData.address_parts.zip.trim());
       }
+    }
+    if (nearestStreetAssigned && effectiveStreet) {
+      venueDoc.setAddress('street', effectiveStreet);
+      venueDoc._nearestStreetAssigned = true;
     }
     
     // Copy FULL admin hierarchy from venue data (already from WOF in Pass 1!)
