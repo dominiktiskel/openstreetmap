@@ -15,11 +15,20 @@ module.exports.tests.interface = function(test, common) {
     'tagMapper',
     'adminLookup',
     'addressExtractor',
+    'localityExtractor',
+    'streetExtractor',
+    'houseNumbersCollector',
+    'documentSplitter',
+    'pass2DocumentGenerator',
     'categoryMapper',
+    'typeMapper',
     'addendumMapper',
     'popularityMapper',
     'dbMapper',
     'elasticsearch',
+    'importPass1',
+    'importPass2',
+    'importSinglePass',
     'import'
   ];
 

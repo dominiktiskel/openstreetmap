@@ -1,25 +1,29 @@
 /**
  * Import Pipeline - Two-Pass Architecture
- * 
+ *
  * Architecture:
  * - Pass 1: OSM PBF → WOF lookup → LevelDB (addresses + venues)
  * - Pass 2: LevelDB → Generate documents → Elasticsearch
- * 
+ *
  * Key features:
  * - OSM PBF read only once
  * - WOF lookup in Pass 1 → full hierarchy stored in LevelDB
  * - Pass 2 generates: streets, addresses, and venues
  * - Aggregation key: street|city|lat|lon (0.1° precision)
  * - Country always from WOF ("Polska" not "PL")
- * 
- * @version 2.0.0
+ * - Stale LevelDB databases removed before Pass 1 (failed runs can't leak data)
+ * - Single-pass mode (aggregateHouseNumbers=false) imports directly to Elasticsearch
+ *
+ * @version 2.10.0
  */
 
 var categoryDefaults = require('../config/category_map');
-var through = require('through2');
+var fs = require('fs');
+var { pipeline } = require('stream');
 var peliasLogger = require('pelias-logger').get('openstreetmap');
 var peliasConfig = require('pelias-config').generate();
 var _ = require('lodash');
+var { ALL_DB_PATHS } = require('../util/leveldb_paths');
 
 var streams = {};
 
@@ -48,16 +52,29 @@ streams.elasticsearch = require('pelias-dbclient');
 
 var aggregateHouseNumbers = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
 
+// Remove stale LevelDB databases from a previous (possibly failed) run.
+// Pass 1 collectors MERGE into existing databases, so leftovers from an
+// aborted import would otherwise leak into the new one.
+function cleanStaleLevelDbs() {
+  ALL_DB_PATHS.forEach(function(dbPath) {
+    try {
+      if (fs.existsSync(dbPath)) {
+        fs.rmSync(dbPath, { recursive: true, force: true });
+        peliasLogger.info('[importPipeline] Removed stale LevelDB: %s', dbPath);
+      }
+    } catch (err) {
+      peliasLogger.error('[importPipeline] Failed to remove stale LevelDB %s: %s', dbPath, err.message);
+    }
+  });
+}
+
 // Pass 1: OSM read + WOF lookup + split decision
 streams.importPass1 = function(callback){
-  if (!aggregateHouseNumbers) {
-    peliasLogger.info('[importPipeline] House numbers aggregation disabled, skipping Pass 1');
-    return callback();
-  }
-
   peliasLogger.info('[importPipeline] ========================================');
   peliasLogger.info('[importPipeline] PASS 1: Reading OSM + WOF lookup + Split');
   peliasLogger.info('[importPipeline] ========================================');
+
+  cleanStaleLevelDbs();
 
   streams.pbfParser()
     .pipe( streams.docConstructor() )
@@ -74,15 +91,11 @@ streams.importPass1 = function(callback){
     .pipe( streams.addendumMapper() )
     .pipe( streams.documentSplitter() )  // Split: LevelDB vs direct to Elasticsearch
     .on('finish', function() {
-      peliasLogger.info('[importPipeline] Pass 1 complete, waiting for LevelDB to close...');
-      // Wait 30 seconds for LevelDB flush and close to complete
-      // This prevents LEVEL_LOCKED errors when Pass 2 tries to open the same DBs
-      // For large files (e.g. Poland with 1M venues, 8.6M addresses), 
-      // closing databases with flush queues can take significant time
-      setTimeout(() => {
-        peliasLogger.info('[importPipeline] Starting Pass 2...');
+      // Collectors have already signalled 'closed' (document_splitter waits
+      // for them) and Pass 2 retries LEVEL_LOCKED with backoff, so no
+      // additional fixed delay is needed here.
+      peliasLogger.info('[importPipeline] Pass 1 complete, starting Pass 2...');
       callback();
-      }, 30000);
     })
     .on('error', function(err) {
       peliasLogger.error('[importPipeline] Pass 1 error:', err);
@@ -90,27 +103,67 @@ streams.importPass1 = function(callback){
     });
 };
 
-// Pass 2: Read LevelDB and generate address + street documents
+// Pass 2: Read LevelDB and generate documents for Elasticsearch
 streams.importPass2 = function(){
   peliasLogger.info('[importPipeline] ========================================');
-  peliasLogger.info('[importPipeline] PASS 2: Generating addresses & streets from LevelDB');
+  peliasLogger.info('[importPipeline] PASS 2: Generating documents from LevelDB');
   peliasLogger.info('[importPipeline] ========================================');
 
-  // Pass 2: read from LevelDB and generate street docs
-  // No OSM PBF parsing, no WOF lookup - everything is already in LevelDB!
-  const generator = streams.pass2DocumentGenerator();
-  
-  // Trigger flush phase by ending the stream immediately
-  // (pass2_document_generator works in flush phase, not transform)
-  generator.end();
-  
-  generator
-    .pipe( streams.blacklistStream() )
-    .pipe( streams.categoryMapper( categoryDefaults ) )
-    .pipe( streams.addendumMapper() )
-    .pipe( streams.popularityMapper() )
-    .pipe( streams.dbMapper() )
-    .pipe( streams.elasticsearch({name: 'openstreetmap'}) );
+  // pass2DocumentGenerator returns a Readable (async generator) -
+  // backpressure is handled natively by the stream machinery.
+  pipeline(
+    streams.pass2DocumentGenerator(),
+    streams.blacklistStream(),
+    streams.categoryMapper( categoryDefaults ),
+    streams.addendumMapper(),
+    streams.popularityMapper(),
+    streams.dbMapper(),
+    streams.elasticsearch({name: 'openstreetmap'}),
+    function(err) {
+      if (err) {
+        peliasLogger.error('[importPipeline] Pass 2 failed:', err);
+        process.exitCode = 1;
+      } else {
+        peliasLogger.info('[importPipeline] Pass 2 complete - all documents sent to Elasticsearch');
+      }
+    }
+  );
+};
+
+// Single-pass import (aggregateHouseNumbers=false):
+// same streams as Pass 1, but documents go straight to Elasticsearch
+// instead of being collected into LevelDB.
+streams.importSinglePass = function(){
+  peliasLogger.info('[importPipeline] ========================================');
+  peliasLogger.info('[importPipeline] SINGLE PASS: OSM → WOF lookup → Elasticsearch');
+  peliasLogger.info('[importPipeline] (house numbers aggregation disabled)');
+  peliasLogger.info('[importPipeline] ========================================');
+
+  pipeline(
+    streams.pbfParser(),
+    streams.docConstructor(),
+    streams.addressesWithoutStreet(),
+    streams.tagMapper(),
+    streams.addressExtractor(),
+    streams.localityExtractor(),
+    streams.streetExtractor(),
+    streams.blacklistStream(),
+    streams.adminLookup(),
+    streams.categoryMapper( categoryDefaults ),
+    streams.popularityMapper(),
+    streams.typeMapper(),
+    streams.addendumMapper(),
+    streams.dbMapper(),
+    streams.elasticsearch({name: 'openstreetmap'}),
+    function(err) {
+      if (err) {
+        peliasLogger.error('[importPipeline] Single-pass import failed:', err);
+        process.exitCode = 1;
+      } else {
+        peliasLogger.info('[importPipeline] Single-pass import complete');
+      }
+    }
+  );
 };
 
 // Main import function - orchestrates both passes
@@ -126,11 +179,9 @@ streams.import = function(){
       streams.importPass2();
     });
   } else {
-    // Single-pass import without aggregation
-    peliasLogger.info('[importPipeline] Running single-pass import (house numbers aggregation disabled)');
-    streams.importPass2(); // Pass 2 works fine without aggregation
+    // Single-pass import without aggregation - documents flow directly to ES
+    streams.importSinglePass();
   }
 };
 
 module.exports = streams;
-

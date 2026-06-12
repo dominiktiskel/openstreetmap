@@ -2,18 +2,75 @@
 
 This fork contains custom modifications to prioritize OpenStreetMap administrative data over Who's on First (WOF) data, and to aggregate house numbers for streets using memory-efficient streaming.
 
-## Version: v2.8.2
+## Version: v2.10.0
 
 ## Fork Information
 
 - **Upstream**: [pelias/openstreetmap](https://github.com/pelias/openstreetmap)
 - **Fork**: [dominiktiskel/openstreetmap](https://github.com/dominiktiskel/openstreetmap)
 - **Branch**: `custom`
-- **Docker Image**: `tiskel/openstreetmap:v2.8.2`
+- **Docker Image**: `tiskel/openstreetmap:v2.10.0`
 
 ---
 
 ## Changelog
+
+### v2.10.0 (2026-06-12)
+
+**Fix: lost house numbers (flush race), real backpressure, stale LevelDB cleanup, per-address zip**
+
+**1. CRITICAL - Serialized LevelDB flushes in house_numbers_collector**
+
+v2.8.2 replaced the promise chain with an unordered `pendingFlushes` counter. This fixed Pass 1/Pass 2 synchronization but REMOVED flush serialization: multiple flushes could run concurrently against the same LevelDB. Since each flush performs a read-merge-write cycle per street key, two concurrent flushes touching the same key would both read the old value and the second `put` would overwrite the first one's merge - **silently losing house numbers**. This was likely on every import, because PBF files are spatially clustered (the same street appears in consecutive 2,500-doc batches).
+
+Fix: flushes are queued on a promise chain (at most one flush at a time) AND tracked by the counter (final flush waits for true completion). `flushBufferToLevelDB` now also uses one `getMany()` + one `batch.write()` instead of per-key `get`/`put`.
+
+**2. Real backpressure in Pass 2 (`pass2_document_generator`)**
+
+The old `through2`-based generator pushed documents from inside the flush callback; when `push()` returned false it only slept 10ms and kept pushing, so the internal buffer could grow without bound (OOM risk with 4 countries in one run). Rewritten as an async generator wrapped in `stream.Readable.from()` - Node suspends the generator whenever downstream (Elasticsearch) is slower. The duplicated LEVEL_LOCKED retry blocks were extracted into `openLevelDbWithRetry()`.
+
+**3. Stale LevelDB databases removed before Pass 1 (`importPipeline`)**
+
+Collectors merge into existing databases, so leftovers from a failed/aborted run leaked into the next import. All three databases are now deleted at the start of Pass 1. Shared paths moved to `util/leveldb_paths.js`.
+
+**4. Pass 2 / single-pass error handling (`importPipeline`)**
+
+Pass 2 had no error handling at all. Both Pass 2 and the new single-pass flow now use `stream.pipeline()` with an error callback that sets a non-zero exit code. The fixed 30s wait between passes was removed (collector `closed` events + LEVEL_LOCKED retry already cover it).
+
+**5. Fixed `aggregateHouseNumbers: false` importing nothing**
+
+The single-pass branch called `importPass2()`, which is a no-op when aggregation is disabled - so nothing was imported. There is now a true single-pass pipeline: PBF -> extractors -> WOF lookup -> mappers -> Elasticsearch (no LevelDB).
+
+**6. Per-file `importVenues` was ignored (`pbf.js`, `multiple_pbfs.js`)**
+
+`pbf.config()` always read `import[0].importVenues`, overwriting the per-file value passed by `multiple_pbfs`. Now the per-file flag wins; `multiple_pbfs` generates config WITH the schema so the Joi default (`importVenues: true`) applies per entry.
+
+**7. Per-address postal code**
+
+House number entries now store `{num, lat, lon, zip}`; Pass 2 address documents get their own zip with fallback to the street-level zip. Backward compatible with both older stored formats (plain string, `{num, lat, lon}`).
+
+**8. Correct coordinate checks**
+
+Truthy checks (`centroid.lat && centroid.lon`) dropped/degraded records at latitude/longitude exactly 0 (the prime meridian crosses England). Replaced with `!= null` checks in all collectors and Pass 2.
+
+**9. Misc**
+
+- `document_splitter`: each collector is counted at most once even if it emits both `closed` and `error`; first error is propagated to `done()`.
+- `venue_collector`: batched LevelDB writes (`db.batch()`), matching `locality_collector`.
+- Removed dead code: `stream/osm_admin_extractor.js` (not wired into the pipeline since the V2 rewrite) + its test + the `preferOsmAdmin` schema entry/README section.
+- `docker-compose.yml` (common-mini): `NODE_MAX_HEAP=16384` replaces `NODE_OPTIONS` (the CLI flag in `bin/start` overrides `NODE_OPTIONS`, so the old setting silently did nothing and the heap stayed at 8GB).
+- `pelias.json` (common-mini): explicit `importVenues: true` on all import entries; removed unused `preferOsmAdmin` / `useV2Pipeline` keys.
+
+**Modified Files**:
+- `stream/house_numbers_collector.js` (serialized flushes, getMany+batch, per-address zip, coord checks)
+- `stream/pass2_document_generator.js` (Readable.from async generator, per-address zip, coord checks)
+- `stream/importPipeline.js` (stale DB cleanup, single-pass, pipeline() error handling, no 30s wait)
+- `stream/document_splitter.js` (settle-once guard)
+- `stream/venue_collector.js`, `stream/locality_collector.js` (batch writes, coord checks, shared paths)
+- `stream/pbf.js`, `stream/multiple_pbfs.js` (per-file importVenues)
+- `util/leveldb_paths.js` (new - shared DB paths)
+- `schema.js`, `README.md` (preferOsmAdmin removal)
+- removed: `stream/osm_admin_extractor.js`, `test/stream/osm_admin_extractor.js`
 
 ### v2.8.2 (2026-01-20)
 

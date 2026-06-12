@@ -11,21 +11,17 @@
  * 
  * In Pass 2, these will be read from LevelDB and imported to Elasticsearch.
  * 
- * @version 2.8.2
+ * @version 2.10.0
  */
 
 const through = require('through2');
 const { Level } = require('level');
-const path = require('path');
 const peliasLogger = require('pelias-logger').get('openstreetmap');
-const peliasConfig = require('pelias-config').generate();
-const _ = require('lodash');
 const fs = require('fs');
 const { EventEmitter } = require('events');
 
 // Configuration
-const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
-const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-localities'); // Separate DB for localities!
+const { LOCALITIES_DB_PATH: DB_PATH } = require('../util/leveldb_paths'); // Separate DB for localities!
 
 // In-memory buffer before writing to LevelDB
 const BUFFER_SIZE = 500;  // Small buffer to prevent OOM with blocking flush
@@ -142,7 +138,7 @@ module.exports = function() {
         const name = doc.getName('default');
         const centroid = doc.getCentroid();
         
-        if (!centroid || !centroid.lat || !centroid.lon) {
+        if (!centroid || !Number.isFinite(centroid.lat) || !Number.isFinite(centroid.lon)) {
           return next(); // Skip documents without valid coordinates
         }
         

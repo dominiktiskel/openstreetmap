@@ -11,21 +11,17 @@
  * 
  * In Pass 2, these will be read from LevelDB and imported to Elasticsearch.
  * 
- * @version 2.8.2
+ * @version 2.10.0
  */
 
 const through = require('through2');
 const { Level } = require('level');
-const path = require('path');
 const peliasLogger = require('pelias-logger').get('openstreetmap');
-const peliasConfig = require('pelias-config').generate();
-const _ = require('lodash');
 const fs = require('fs');
 const { EventEmitter } = require('events');
 
 // Configuration
-const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
-const DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-venues-v2'); // Separate DB for venues!
+const { VENUES_DB_PATH: DB_PATH } = require('../util/leveldb_paths'); // Separate DB for venues!
 
 // In-memory buffer before writing to LevelDB
 const BUFFER_SIZE = 500;  // Small buffer to prevent OOM with blocking flush
@@ -93,9 +89,11 @@ module.exports = function() {
           
           // Flush remaining buffer if not empty
           if (buffer.length > 0 && db) {
+            const batch = db.batch();
             for (const { key, value } of buffer) {
-              await db.put(key, value);
+              batch.put(key, value);
             }
+            await batch.write();
             peliasLogger.info(
               '[venue_collector] Final flush: %d venues/POI (including alternative names) saved to LevelDB',
               totalVenues
@@ -141,7 +139,7 @@ module.exports = function() {
         const centroid = doc.getCentroid();
         const tags = doc.getMeta('tags');
         
-        if (!centroid || !centroid.lat || !centroid.lon) {
+        if (!centroid || !Number.isFinite(centroid.lat) || !Number.isFinite(centroid.lon)) {
           return next(); // Skip documents without valid coordinates
         }
         
@@ -326,15 +324,18 @@ module.exports = function() {
           pendingFlushes++;
           
           // Queue flush - counter-based tracking
+          // (independent puts on distinct keys - safe to run without chaining)
           (async () => {
             if (!db || bufferToFlush.length === 0) {
               pendingFlushes--;
               return;
             }
             try {
+              const batch = db.batch();
               for (const { key, value } of bufferToFlush) {
-                await db.put(key, value);
+                batch.put(key, value);
               }
+              await batch.write();
             } catch (err) {
               peliasLogger.error('[venue_collector] Error flushing buffer:', err);
             } finally {

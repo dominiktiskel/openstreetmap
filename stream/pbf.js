@@ -44,8 +44,11 @@ function config(opts){
 
   // Use default parser tags
   if(!opts.tags){
-    // check if we import venues
-    opts.importVenues = settings.imports.openstreetmap.import[0].importVenues;
+    // check if we import venues; respect the per-file flag passed in by
+    // multiple_pbfs (only fall back to the first import entry when unset)
+    if(opts.importVenues === undefined){
+      opts.importVenues = settings.imports.openstreetmap.import[0].importVenues;
+    }
     if(opts.importVenues){
       opts.tags = features.tags.concat(features.venue_tags);
     } else {

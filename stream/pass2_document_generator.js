@@ -1,54 +1,49 @@
 /**
  * Pass 2 Document Generator
- * 
+ *
  * Reads data from THREE separate LevelDB databases and generates documents for Elasticsearch.
  * No WOF lookup needed - all hierarchy is already in LevelDB from Pass 1!
- * 
+ *
  * Databases:
  * 1. Streets DB (pelias-house-numbers-aggregation-v2):
  *    - Aggregated addresses by street|city|lat|lon
  *    - Generates ONE street document per key with house_numbers
  *    - ALSO generates individual address documents for each house number
  *    - Full admin hierarchy from aggregate.osmAdmin
- * 
+ *
  * 2. Venues DB (pelias-venues-v2):
  *    - Individual venue/POI documents
  *    - Full admin hierarchy from venueData.parent
- * 
+ *
  * 3. Localities DB (pelias-localities):
  *    - Individual locality documents (cities, towns, villages)
  *    - Full admin hierarchy from localityData.parent
- * 
+ *
  * Generated document types:
  * - Streets: layer='street' with house_numbers in addendum
  * - Addresses: layer='address' for specific house numbers (e.g., "Szkutnicza 10")
  * - Venues/POI: layer='venue' for points of interest
  * - Localities: layer='locality' for cities, towns, villages
- * 
- * Using separate databases prevents LEVEL_LOCKED errors from concurrent access!
- * 
- * This is the ONLY place where Elasticsearch client is created,
- * completely eliminating ES client reuse issues!
- * 
- * @version 2.9.0 - Per-address coordinates instead of street centroid
+ *
+ * Implementation: an async generator wrapped in stream.Readable.from(),
+ * which gives REAL backpressure - Node pauses the generator whenever the
+ * downstream (Elasticsearch indexing) is slower than document generation.
+ *
+ * @version 2.10.0 - Readable.from async generator (true backpressure) + per-address zip
  */
 
-const through = require('through2');
+const { Readable } = require('stream');
 const { Level } = require('level');
-const path = require('path');
 const peliasLogger = require('pelias-logger').get('openstreetmap');
 const peliasConfig = require('pelias-config').generate();
 const _ = require('lodash');
 const fs = require('fs');
 const Document = require('pelias-model').Document;
+const { STREETS_DB_PATH, VENUES_DB_PATH, LOCALITIES_DB_PATH } = require('../util/leveldb_paths');
 
 // Configuration
-const LEVELDB_PATH_BASE = _.get(peliasConfig, 'imports.openstreetmap.leveldbpath', require('os').tmpdir());
 const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
 const IMPORT_STREETS = _.get(peliasConfig, 'imports.openstreetmap.importStreets', true);
-const STREETS_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-house-numbers-aggregation-v2');
-const VENUES_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-venues-v2');
-const LOCALITIES_DB_PATH = path.join(LEVELDB_PATH_BASE, 'pelias-localities');
 
 const NEAREST_STREET_RADIUS_M = 150;
 
@@ -114,477 +109,310 @@ class StreetSpatialIndex {
   }
 }
 
-module.exports = function() {
-  let enabled = ENABLE_AGGREGATION && IMPORT_STREETS;
-  let streetsGenerated = 0;
-  
-  // Increase highWaterMark to reduce backpressure frequency
-  // Default is 16 objects, we increase to 500 for better throughput while preventing memory overflow
-  return through.obj({ highWaterMark: 500 },
-    // Transform function - pass through (no documents come in)
-    function(doc, enc, next) {
-      next();
-    },
-    
-    // Flush function - generate all documents from LevelDB
-    function(done) {
-      if (!enabled) {
-        peliasLogger.info('[pass2_document_generator] Document generation disabled');
-        return done();
+/**
+ * Open a LevelDB database, retrying on LEVEL_LOCKED.
+ * Pass 1 collectors may still be releasing file locks when Pass 2 starts.
+ */
+async function openLevelDbWithRetry(dbPath, label) {
+  const MAX_RETRIES = 60;  // up to ~10 minutes total
+  let retries = 0;
+
+  while (true) {
+    try {
+      const db = new Level(dbPath, { valueEncoding: 'json' });
+      await db.open();
+      peliasLogger.info('[pass2_document_generator] %s opened successfully', label);
+      return db;
+    } catch (err) {
+      if (err.code === 'LEVEL_LOCKED' && retries < MAX_RETRIES - 1) {
+        retries++;
+        const waitTime = Math.min(1000 * retries, 10000);  // backoff, max 10s
+        peliasLogger.warn('[pass2_document_generator] %s locked, retry %d/%d in %dms...', label, retries, MAX_RETRIES, waitTime);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        throw err;
       }
-      
-      // Check if databases exist
-      const streetsExist = fs.existsSync(STREETS_DB_PATH);
-      const venuesExist = fs.existsSync(VENUES_DB_PATH);
-      const localitiesExist = fs.existsSync(LOCALITIES_DB_PATH);
-      
-      if (!streetsExist && !venuesExist && !localitiesExist) {
-        peliasLogger.warn('[pass2_document_generator] No LevelDB found - skipping');
-        return done();
-      }
-      
-      peliasLogger.info('[pass2_document_generator] ========================================');
-      peliasLogger.info('[pass2_document_generator] Generating documents from LevelDB');
-      peliasLogger.info('[pass2_document_generator] Configuration: highWaterMark=500, backpressure handling enabled');
-      peliasLogger.info('[pass2_document_generator] Streets DB: %s', streetsExist ? 'found' : 'not found');
-      peliasLogger.info('[pass2_document_generator] Venues DB: %s', venuesExist ? 'found' : 'not found');
-      peliasLogger.info('[pass2_document_generator] Localities DB: %s', localitiesExist ? 'found' : 'not found');
-      peliasLogger.info('[pass2_document_generator] ========================================');
-      
-      const self = this;
-      let venuesGenerated = 0;
-      let venuesWithNearestStreet = 0;
-      let addressesGenerated = 0;  // Track address documents
-      let localitiesGenerated = 0;  // Track locality documents
-      let backpressureEvents = 0;  // Track backpressure events
-      
-      // Async iteration through BOTH LevelDB databases
-      (async () => {
-        try {
-          // PHASE 0: Build spatial index of streets for nearest-street lookup
-          const streetIndex = new StreetSpatialIndex();
-          if (streetsExist) {
-            peliasLogger.info('[pass2_document_generator] Building street spatial index...');
-            let indexDb = null;
-            let retries = 0;
-            const MAX_IDX_RETRIES = 60;
-            while (retries < MAX_IDX_RETRIES) {
-              try {
-                indexDb = new Level(STREETS_DB_PATH, { valueEncoding: 'json' });
-                await indexDb.open();
-                break;
-              } catch (err) {
-                if (err.code === 'LEVEL_LOCKED' && retries < MAX_IDX_RETRIES - 1) {
-                  retries++;
-                  const waitTime = Math.min(1000 * retries, 10000);
-                  peliasLogger.warn('[pass2_document_generator] Streets DB locked (index build), retry %d/%d in %dms...', retries, MAX_IDX_RETRIES, waitTime);
-                  await new Promise(resolve => setTimeout(resolve, waitTime));
-                } else {
-                  throw err;
-                }
-              }
-            }
-            if (indexDb) {
-              for await (const [key, aggregate] of indexDb.iterator()) {
-                if (!aggregate || !aggregate.centroid || aggregate.centroid.count === 0) continue;
-                const streetName = aggregate.streetName || key.split('|')[0];
-                if (!streetName) continue;
-
-                if (aggregate.numbers && Array.isArray(aggregate.numbers)) {
-                  for (const item of aggregate.numbers) {
-                    if (typeof item === 'object' && item.lat && item.lon) {
-                      streetIndex.addStreet(streetName, item.lat, item.lon);
-                    }
-                  }
-                }
-
-                const avgLat = aggregate.centroid.lat / aggregate.centroid.count;
-                const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
-                streetIndex.addStreet(streetName, avgLat, avgLon);
-              }
-              await indexDb.close();
-              peliasLogger.info('[pass2_document_generator] Street spatial index ready: %d points in %d cells',
-                streetIndex.pointCount, streetIndex.grid.size);
-            }
-          }
-
-          // FIRST: Generate venue documents from venues DB
-          if (venuesExist) {
-            peliasLogger.info('[pass2_document_generator] Starting venues generation with backpressure handling...');
-            
-            // Retry logic for opening database - may be locked from Pass 1
-            // For large files (e.g. Poland with 1M venues), flush queue can take several minutes
-            let venuesDb = null;
-            let retries = 0;
-            const MAX_RETRIES = 60;  // 60 attempts = up to ~10 minutes total
-            
-            while (retries < MAX_RETRIES) {
-              try {
-                venuesDb = new Level(VENUES_DB_PATH, { valueEncoding: 'json' });
-                await venuesDb.open();
-                peliasLogger.info('[pass2_document_generator] Venues DB opened successfully');
-                break;  // Success!
-              } catch (err) {
-                if (err.code === 'LEVEL_LOCKED' && retries < MAX_RETRIES - 1) {
-                  retries++;
-                  const waitTime = Math.min(1000 * retries, 10000);  // Exponential backoff, max 10s
-                  peliasLogger.warn('[pass2_document_generator] Venues DB locked, retry %d/%d in %dms...', retries, MAX_RETRIES, waitTime);
-                  await new Promise(resolve => setTimeout(resolve, waitTime));
-                } else {
-                  throw err;  // Give up
-                }
-              }
-            }
-            
-            if (!venuesDb) {
-              throw new Error('Failed to open Venues DB after ' + MAX_RETRIES + ' retries');
-            }
-            
-            for await (const [key, venueData] of venuesDb.iterator()) {
-              try {
-                const venueDoc = generateVenueDocument(venueData, streetIndex);
-                if (venueDoc) {
-                  if (venueDoc._nearestStreetAssigned) {
-                    venuesWithNearestStreet++;
-                    delete venueDoc._nearestStreetAssigned;
-                  }
-                  // Push with backpressure handling
-                  if (!self.push(venueDoc)) {
-                    backpressureEvents++;
-                    if (backpressureEvents % 100 === 0) {
-                      peliasLogger.debug('[pass2_document_generator] Venues: backpressure events: %d', backpressureEvents);
-                    }
-                    // Give downstream time to process - small delay to prevent overwhelming
-                    await new Promise(resolve => setTimeout(resolve, 10));
-                  }
-                  venuesGenerated++;
-                  
-                  if (venuesGenerated % 1000 === 0) {
-                    peliasLogger.info('[pass2_document_generator] Generated %d venues', venuesGenerated);
-                  }
-                }
-              } catch (err) {
-                peliasLogger.error('[pass2_document_generator] Error processing venue "%s": %s', key, err.message);
-              }
-            }
-            
-            await venuesDb.close();
-            peliasLogger.info('[pass2_document_generator] Venues complete: %d documents (%d with nearest-street assigned)', venuesGenerated, venuesWithNearestStreet);
-          }
-          
-          // SECOND: Generate locality documents from localities DB
-          if (localitiesExist) {
-            peliasLogger.info('[pass2_document_generator] Starting localities generation with backpressure handling...');
-            
-            // Retry logic for opening database - may be locked from Pass 1
-            let localitiesDb = null;
-            let retries = 0;
-            const MAX_RETRIES = 60;
-            
-            while (retries < MAX_RETRIES) {
-              try {
-                localitiesDb = new Level(LOCALITIES_DB_PATH, { valueEncoding: 'json' });
-                await localitiesDb.open();
-                peliasLogger.info('[pass2_document_generator] Localities DB opened successfully');
-                break;
-              } catch (err) {
-                if (err.code === 'LEVEL_LOCKED' && retries < MAX_RETRIES - 1) {
-                  retries++;
-                  const waitTime = Math.min(1000 * retries, 10000);
-                  peliasLogger.warn('[pass2_document_generator] Localities DB locked, retry %d/%d in %dms...', retries, MAX_RETRIES, waitTime);
-                  await new Promise(resolve => setTimeout(resolve, waitTime));
-                } else {
-                  throw err;
-                }
-              }
-            }
-            
-            if (!localitiesDb) {
-              throw new Error('Failed to open Localities DB after ' + MAX_RETRIES + ' retries');
-            }
-            
-            for await (const [key, localityData] of localitiesDb.iterator()) {
-              try {
-                const localityDoc = generateLocalityDocument(localityData);
-                if (localityDoc) {
-                  // Push with backpressure handling
-                  if (!self.push(localityDoc)) {
-                    backpressureEvents++;
-                    if (backpressureEvents % 100 === 0) {
-                      peliasLogger.debug('[pass2_document_generator] Localities: backpressure events: %d', backpressureEvents);
-                    }
-                    // Give downstream time to process - small delay to prevent overwhelming
-                    await new Promise(resolve => setTimeout(resolve, 10));
-                  }
-                  localitiesGenerated++;
-                  
-                  if (localitiesGenerated % 1000 === 0) {
-                    peliasLogger.info('[pass2_document_generator] Generated %d localities', localitiesGenerated);
-                  }
-                }
-              } catch (err) {
-                peliasLogger.error('[pass2_document_generator] Error processing locality "%s": %s', key, err.message);
-              }
-            }
-            
-            await localitiesDb.close();
-            peliasLogger.info('[pass2_document_generator] Localities complete: %d documents', localitiesGenerated);
-          }
-          
-          // THIRD: Generate street documents from streets DB
-          if (streetsExist) {
-            peliasLogger.info('[pass2_document_generator] Starting streets & addresses generation with backpressure handling...');
-            
-            // Retry logic for opening database - may be locked from Pass 1
-            // For large files (e.g. Poland with 8.6M addresses), flush queue can take several minutes
-            let streetsDb = null;
-            let retries = 0;
-            const MAX_RETRIES = 60;
-            
-            while (retries < MAX_RETRIES) {
-              try {
-                streetsDb = new Level(STREETS_DB_PATH, { valueEncoding: 'json' });
-                await streetsDb.open();
-                peliasLogger.info('[pass2_document_generator] Streets DB opened successfully');
-                break;
-              } catch (err) {
-                if (err.code === 'LEVEL_LOCKED' && retries < MAX_RETRIES - 1) {
-                  retries++;
-                  const waitTime = Math.min(1000 * retries, 10000);
-                  peliasLogger.warn('[pass2_document_generator] Streets DB locked, retry %d/%d in %dms...', retries, MAX_RETRIES, waitTime);
-                  await new Promise(resolve => setTimeout(resolve, waitTime));
-                } else {
-                  throw err;
-                }
-              }
-            }
-            
-            if (!streetsDb) {
-              throw new Error('Failed to open Streets DB after ' + MAX_RETRIES + ' retries');
-            }
-            
-            for await (const [key, aggregate] of streetsDb.iterator()) {
-              try {
-                // Street aggregate processing
-                const data = aggregate;
-              
-              // Validate aggregate - need at least a centroid (from address OR highway way)
-              if (!aggregate) {
-                continue;
-              }
-
-              if (!aggregate.centroid || aggregate.centroid.count === 0) {
-                peliasLogger.debug('[pass2_document_generator] Skipping street (no centroid): %s', key);
-                continue;
-              }
-              
-              // Get street name
-              const streetName = aggregate.streetName || key.split('|')[0];
-              if (!streetName) {
-                peliasLogger.debug('[pass2_document_generator] Skipping street (no name): %s', key);
-                continue;
-              }
-              
-              // Calculate average centroid
-              const avgLat = aggregate.centroid.lat / aggregate.centroid.count;
-              const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
-              
-              // Generate unique ID for street
-              const streetId = `street_${key.replace(/\|/g, '_')}`;
-              
-              // Create street document
-              const streetDoc = new Document('openstreetmap', 'street', streetId)
-                .setName('default', streetName)
-                .setCentroid({ lat: avgLat, lon: avgLon });
-              
-              // Add house numbers to addendum (may be empty for highway-only streets)
-              if (data.numbers && data.numbers.length > 0) {
-                streetDoc.setAddendum('osm', {
-                  house_numbers: data.numbers.map(item => typeof item === 'object' ? item.num : item).join(',')
-                });
-              }
-              
-              // Copy FULL admin hierarchy from aggregate (NO WOF lookup needed!)
-              if (aggregate.osmAdmin) {
-                const osmAdmin = aggregate.osmAdmin;
-                
-                // Add locality
-                if (osmAdmin.locality && osmAdmin.locality.trim()) {
-                  const locality = osmAdmin.locality.trim();
-                  const osmId = 'osm:locality:' + locality.toLowerCase().replace(/\s+/g, '_');
-                  streetDoc.addParent('locality', locality, osmId, undefined);
-                }
-                
-                // Add localadmin
-                if (osmAdmin.localadmin && osmAdmin.localadmin.trim()) {
-                  const localadmin = osmAdmin.localadmin.trim();
-                  const osmId = 'osm:localadmin:' + localadmin.toLowerCase().replace(/\s+/g, '_');
-                  streetDoc.addParent('localadmin', localadmin, osmId, undefined);
-                }
-                
-                // Add county
-                if (osmAdmin.county && osmAdmin.county.trim()) {
-                  const county = osmAdmin.county.trim();
-                  const osmId = 'osm:county:' + county.toLowerCase().replace(/\s+/g, '_');
-                  streetDoc.addParent('county', county, osmId, undefined);
-                }
-                
-                // Add borough
-                if (osmAdmin.borough && osmAdmin.borough.trim()) {
-                  const borough = osmAdmin.borough.trim();
-                  const osmId = 'osm:borough:' + borough.toLowerCase().replace(/\s+/g, '_');
-                  streetDoc.addParent('borough', borough, osmId, undefined);
-                }
-                
-                // Add neighbourhood
-                if (osmAdmin.neighbourhood && osmAdmin.neighbourhood.trim()) {
-                  const neighbourhood = osmAdmin.neighbourhood.trim();
-                  const osmId = 'osm:neighbourhood:' + neighbourhood.toLowerCase().replace(/\s+/g, '_');
-                  streetDoc.addParent('neighbourhood', neighbourhood, osmId, undefined);
-                }
-                
-                // Add region
-                if (osmAdmin.region && osmAdmin.region.trim()) {
-                  const region = osmAdmin.region.trim();
-                  const osmId = 'osm:region:' + region.toLowerCase().replace(/\s+/g, '_');
-                  streetDoc.addParent('region', region, osmId, undefined);
-                }
-                
-                // Add country
-                if (osmAdmin.country && osmAdmin.country.trim()) {
-                  const country = osmAdmin.country.trim();
-                  const osmId = 'osm:country:' + country.toLowerCase().replace(/\s+/g, '_');
-                  streetDoc.addParent('country', country, osmId, undefined);
-                }
-              }
-              
-              // Add postal code if available
-              if (data.zip && data.zip.trim()) {
-                streetDoc.setAddress('zip', data.zip.trim());
-              }
-              
-              // Push street document downstream with backpressure handling
-              if (!self.push(streetDoc)) {
-                backpressureEvents++;
-                if (backpressureEvents % 100 === 0) {
-                  peliasLogger.debug('[pass2_document_generator] Streets: backpressure events: %d', backpressureEvents);
-                }
-                // Give downstream time to process - small delay to prevent overwhelming
-                await new Promise(resolve => setTimeout(resolve, 10));
-              }
-              streetsGenerated++;
-              
-              // Generate individual address documents for each house number (when present)
-              if (data.numbers && data.numbers.length > 0) {
-                for (const houseNumItem of data.numbers) {
-                  let houseNumber;
-                  try {
-                    // Support old format (string) and new format ({num, lat, lon})
-                    houseNumber = typeof houseNumItem === 'object' ? houseNumItem.num : houseNumItem;
-                    const addrLat = (typeof houseNumItem === 'object' && houseNumItem.lat) ? houseNumItem.lat : avgLat;
-                    const addrLon = (typeof houseNumItem === 'object' && houseNumItem.lon) ? houseNumItem.lon : avgLon;
-
-                    const addressId = `address_${streetName.toLowerCase().replace(/\s+/g, '_')}_${houseNumber}_${addrLat.toFixed(6)}_${addrLon.toFixed(6)}`;
-                    
-                    const addressDoc = new Document('openstreetmap', 'address', addressId)
-                      .setName('default', `${streetName} ${houseNumber}`)
-                      .setCentroid({ lat: addrLat, lon: addrLon })  // Use individual address coordinates
-                      .setAddress('street', streetName)
-                      .setAddress('number', houseNumber);
-                    
-                    // Add postal code if available
-                    if (data.zip && data.zip.trim()) {
-                      addressDoc.setAddress('zip', data.zip.trim());
-                    }
-                    
-                    // Copy same admin hierarchy as street
-                    if (data.osmAdmin) {
-                      const adminLevels = ['locality', 'localadmin', 'county', 'borough', 'neighbourhood', 'region', 'country'];
-                      for (const level of adminLevels) {
-                        if (data.osmAdmin[level] && data.osmAdmin[level].trim()) {
-                          const name = data.osmAdmin[level].trim();
-                          const osmId = 'osm:' + level + ':' + name.toLowerCase().replace(/\s+/g, '_');
-                          addressDoc.addParent(level, name, osmId, undefined);
-                        }
-                      }
-                    }
-                    
-                    // Push with backpressure handling
-                    if (!self.push(addressDoc)) {
-                      backpressureEvents++;
-                      if (backpressureEvents % 100 === 0) {
-                        peliasLogger.debug('[pass2_document_generator] Addresses: backpressure events: %d', backpressureEvents);
-                      }
-                      // Give downstream time to process - small delay to prevent overwhelming
-                      await new Promise(resolve => setTimeout(resolve, 10));
-                    }
-                    addressesGenerated++;
-                  } catch (addrErr) {
-                    peliasLogger.error('[pass2_document_generator] Error generating address %s %s: %s', streetName, houseNumber, addrErr.message);
-                  }
-                }
-              }
-              
-              // Log progress
-              if (streetsGenerated % 1000 === 0) {
-                peliasLogger.info('[pass2_document_generator] Generated %d streets, %d addresses', streetsGenerated, addressesGenerated);
-              }
-              
-            } catch (err) {
-              peliasLogger.error('[pass2_document_generator] Error processing street "%s": %s', key, err.message);
-            }
-          }
-          
-          await streetsDb.close();
-          peliasLogger.info('[pass2_document_generator] Streets complete: %d street docs, %d address docs', streetsGenerated, addressesGenerated);
-        }
-          
-          // Summary
-          peliasLogger.info('[pass2_document_generator] ========================================');
-          peliasLogger.info(
-            '[pass2_document_generator] Complete: %d total documents',
-            streetsGenerated + addressesGenerated + venuesGenerated + localitiesGenerated
-          );
-          peliasLogger.info('[pass2_document_generator]   - %d streets', streetsGenerated);
-          peliasLogger.info('[pass2_document_generator]   - %d addresses', addressesGenerated);
-          peliasLogger.info('[pass2_document_generator]   - %d venues/POI (%d with nearest-street)', venuesGenerated, venuesWithNearestStreet);
-          peliasLogger.info('[pass2_document_generator]   - %d localities', localitiesGenerated);
-          peliasLogger.info('[pass2_document_generator]   - %d backpressure events (pauses)', backpressureEvents);
-          peliasLogger.info('[pass2_document_generator] ========================================');
-          peliasLogger.info('[pass2_document_generator] Document generation complete!');
-          peliasLogger.info('[pass2_document_generator] Documents are now in pipeline for Elasticsearch indexing...');
-          peliasLogger.info('[pass2_document_generator] Check dbclient logs below for final indexing progress');
-          peliasLogger.info('[pass2_document_generator] ========================================');
-          
-          // Clean up ALL LevelDB databases after successful generation
-          peliasLogger.info('[pass2_document_generator] Cleaning up LevelDB databases');
-          try {
-            if (fs.existsSync(STREETS_DB_PATH)) {
-              fs.rmSync(STREETS_DB_PATH, { recursive: true, force: true });
-              peliasLogger.info('[pass2_document_generator] Streets DB cleaned up');
-            }
-            if (fs.existsSync(VENUES_DB_PATH)) {
-              fs.rmSync(VENUES_DB_PATH, { recursive: true, force: true });
-              peliasLogger.info('[pass2_document_generator] Venues DB cleaned up');
-            }
-            if (fs.existsSync(LOCALITIES_DB_PATH)) {
-              fs.rmSync(LOCALITIES_DB_PATH, { recursive: true, force: true });
-              peliasLogger.info('[pass2_document_generator] Localities DB cleaned up');
-            }
-          } catch (err) {
-            peliasLogger.warn('[pass2_document_generator] Failed to clean up LevelDB: %s', err.message);
-          }
-          
-          done();
-          
-        } catch (err) {
-          peliasLogger.error('[pass2_document_generator] Fatal error:', err);
-          done(err);
-        }
-      })();
     }
-  );
+  }
+}
+
+module.exports = function() {
+  const enabled = ENABLE_AGGREGATION && IMPORT_STREETS;
+
+  if (!enabled) {
+    peliasLogger.info('[pass2_document_generator] Document generation disabled');
+    return Readable.from([], { objectMode: true });
+  }
+
+  // Readable.from() drives the async generator with real backpressure:
+  // the generator is suspended whenever downstream buffers are full.
+  return Readable.from(generateAllDocuments(), { objectMode: true, highWaterMark: 500 });
 };
+
+/**
+ * Async generator yielding all Pass 2 documents:
+ * venues -> localities -> streets (+ per-house-number addresses)
+ */
+async function* generateAllDocuments() {
+  // Check if databases exist
+  const streetsExist = fs.existsSync(STREETS_DB_PATH);
+  const venuesExist = fs.existsSync(VENUES_DB_PATH);
+  const localitiesExist = fs.existsSync(LOCALITIES_DB_PATH);
+
+  if (!streetsExist && !venuesExist && !localitiesExist) {
+    peliasLogger.warn('[pass2_document_generator] No LevelDB found - skipping');
+    return;
+  }
+
+  peliasLogger.info('[pass2_document_generator] ========================================');
+  peliasLogger.info('[pass2_document_generator] Generating documents from LevelDB');
+  peliasLogger.info('[pass2_document_generator] Streets DB: %s', streetsExist ? 'found' : 'not found');
+  peliasLogger.info('[pass2_document_generator] Venues DB: %s', venuesExist ? 'found' : 'not found');
+  peliasLogger.info('[pass2_document_generator] Localities DB: %s', localitiesExist ? 'found' : 'not found');
+  peliasLogger.info('[pass2_document_generator] ========================================');
+
+  let streetsGenerated = 0;
+  let venuesGenerated = 0;
+  let venuesWithNearestStreet = 0;
+  let addressesGenerated = 0;
+  let localitiesGenerated = 0;
+
+  // PHASE 0: Build spatial index of streets for nearest-street lookup
+  const streetIndex = new StreetSpatialIndex();
+  if (streetsExist) {
+    peliasLogger.info('[pass2_document_generator] Building street spatial index...');
+    const indexDb = await openLevelDbWithRetry(STREETS_DB_PATH, 'Streets DB (index build)');
+
+    for await (const [key, aggregate] of indexDb.iterator()) {
+      if (!aggregate || !aggregate.centroid || aggregate.centroid.count === 0) continue;
+      const streetName = aggregate.streetName || key.split('|')[0];
+      if (!streetName) continue;
+
+      if (aggregate.numbers && Array.isArray(aggregate.numbers)) {
+        for (const item of aggregate.numbers) {
+          if (typeof item === 'object' && Number.isFinite(item.lat) && Number.isFinite(item.lon)) {
+            streetIndex.addStreet(streetName, item.lat, item.lon);
+          }
+        }
+      }
+
+      const avgLat = aggregate.centroid.lat / aggregate.centroid.count;
+      const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
+      streetIndex.addStreet(streetName, avgLat, avgLon);
+    }
+    await indexDb.close();
+    peliasLogger.info('[pass2_document_generator] Street spatial index ready: %d points in %d cells',
+      streetIndex.pointCount, streetIndex.grid.size);
+  }
+
+  // FIRST: Generate venue documents from venues DB
+  if (venuesExist) {
+    peliasLogger.info('[pass2_document_generator] Starting venues generation...');
+    const venuesDb = await openLevelDbWithRetry(VENUES_DB_PATH, 'Venues DB');
+
+    for await (const [key, venueData] of venuesDb.iterator()) {
+      try {
+        const venueDoc = generateVenueDocument(venueData, streetIndex);
+        if (venueDoc) {
+          if (venueDoc._nearestStreetAssigned) {
+            venuesWithNearestStreet++;
+            delete venueDoc._nearestStreetAssigned;
+          }
+          venuesGenerated++;
+
+          if (venuesGenerated % 1000 === 0) {
+            peliasLogger.info('[pass2_document_generator] Generated %d venues', venuesGenerated);
+          }
+
+          yield venueDoc;
+        }
+      } catch (err) {
+        peliasLogger.error('[pass2_document_generator] Error processing venue "%s": %s', key, err.message);
+      }
+    }
+
+    await venuesDb.close();
+    peliasLogger.info('[pass2_document_generator] Venues complete: %d documents (%d with nearest-street assigned)', venuesGenerated, venuesWithNearestStreet);
+  }
+
+  // SECOND: Generate locality documents from localities DB
+  if (localitiesExist) {
+    peliasLogger.info('[pass2_document_generator] Starting localities generation...');
+    const localitiesDb = await openLevelDbWithRetry(LOCALITIES_DB_PATH, 'Localities DB');
+
+    for await (const [key, localityData] of localitiesDb.iterator()) {
+      try {
+        const localityDoc = generateLocalityDocument(localityData);
+        if (localityDoc) {
+          localitiesGenerated++;
+
+          if (localitiesGenerated % 1000 === 0) {
+            peliasLogger.info('[pass2_document_generator] Generated %d localities', localitiesGenerated);
+          }
+
+          yield localityDoc;
+        }
+      } catch (err) {
+        peliasLogger.error('[pass2_document_generator] Error processing locality "%s": %s', key, err.message);
+      }
+    }
+
+    await localitiesDb.close();
+    peliasLogger.info('[pass2_document_generator] Localities complete: %d documents', localitiesGenerated);
+  }
+
+  // THIRD: Generate street + address documents from streets DB
+  if (streetsExist) {
+    peliasLogger.info('[pass2_document_generator] Starting streets & addresses generation...');
+    const streetsDb = await openLevelDbWithRetry(STREETS_DB_PATH, 'Streets DB');
+
+    for await (const [key, aggregate] of streetsDb.iterator()) {
+      try {
+        // Validate aggregate - need at least a centroid (from address OR highway way)
+        if (!aggregate) {
+          continue;
+        }
+
+        if (!aggregate.centroid || aggregate.centroid.count === 0) {
+          peliasLogger.debug('[pass2_document_generator] Skipping street (no centroid): %s', key);
+          continue;
+        }
+
+        // Get street name
+        const streetName = aggregate.streetName || key.split('|')[0];
+        if (!streetName) {
+          peliasLogger.debug('[pass2_document_generator] Skipping street (no name): %s', key);
+          continue;
+        }
+
+        // Calculate average centroid
+        const avgLat = aggregate.centroid.lat / aggregate.centroid.count;
+        const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
+
+        // Generate unique ID for street
+        const streetId = `street_${key.replace(/\|/g, '_')}`;
+
+        // Create street document
+        const streetDoc = new Document('openstreetmap', 'street', streetId)
+          .setName('default', streetName)
+          .setCentroid({ lat: avgLat, lon: avgLon });
+
+        // Add house numbers to addendum (may be empty for highway-only streets)
+        if (aggregate.numbers && aggregate.numbers.length > 0) {
+          streetDoc.setAddendum('osm', {
+            house_numbers: aggregate.numbers.map(item => typeof item === 'object' ? item.num : item).join(',')
+          });
+        }
+
+        // Copy FULL admin hierarchy from aggregate (NO WOF lookup needed!)
+        addOsmAdminParents(streetDoc, aggregate.osmAdmin);
+
+        // Add postal code if available
+        const streetZip = (aggregate.zip && aggregate.zip.trim()) ? aggregate.zip.trim() : null;
+        if (streetZip) {
+          streetDoc.setAddress('zip', streetZip);
+        }
+
+        streetsGenerated++;
+        yield streetDoc;
+
+        // Generate individual address documents for each house number (when present)
+        if (aggregate.numbers && aggregate.numbers.length > 0) {
+          for (const houseNumItem of aggregate.numbers) {
+            let houseNumber;
+            try {
+              // Support old format (string) and new format ({num, lat, lon, zip})
+              const isObj = typeof houseNumItem === 'object' && houseNumItem !== null;
+              houseNumber = isObj ? houseNumItem.num : houseNumItem;
+              const addrLat = (isObj && Number.isFinite(houseNumItem.lat)) ? houseNumItem.lat : avgLat;
+              const addrLon = (isObj && Number.isFinite(houseNumItem.lon)) ? houseNumItem.lon : avgLon;
+              // Per-address zip (v2.10.0) with fallback to street-level zip
+              const addrZip = (isObj && houseNumItem.zip) ? houseNumItem.zip : streetZip;
+
+              const addressId = `address_${streetName.toLowerCase().replace(/\s+/g, '_')}_${houseNumber}_${addrLat.toFixed(6)}_${addrLon.toFixed(6)}`;
+
+              const addressDoc = new Document('openstreetmap', 'address', addressId)
+                .setName('default', `${streetName} ${houseNumber}`)
+                .setCentroid({ lat: addrLat, lon: addrLon })  // Use individual address coordinates
+                .setAddress('street', streetName)
+                .setAddress('number', houseNumber);
+
+              if (addrZip) {
+                addressDoc.setAddress('zip', addrZip);
+              }
+
+              // Copy same admin hierarchy as street
+              addOsmAdminParents(addressDoc, aggregate.osmAdmin);
+
+              addressesGenerated++;
+              yield addressDoc;
+            } catch (addrErr) {
+              peliasLogger.error('[pass2_document_generator] Error generating address %s %s: %s', streetName, houseNumber, addrErr.message);
+            }
+          }
+        }
+
+        // Log progress
+        if (streetsGenerated % 1000 === 0) {
+          peliasLogger.info('[pass2_document_generator] Generated %d streets, %d addresses', streetsGenerated, addressesGenerated);
+        }
+
+      } catch (err) {
+        peliasLogger.error('[pass2_document_generator] Error processing street "%s": %s', key, err.message);
+      }
+    }
+
+    await streetsDb.close();
+    peliasLogger.info('[pass2_document_generator] Streets complete: %d street docs, %d address docs', streetsGenerated, addressesGenerated);
+  }
+
+  // Summary
+  peliasLogger.info('[pass2_document_generator] ========================================');
+  peliasLogger.info(
+    '[pass2_document_generator] Complete: %d total documents',
+    streetsGenerated + addressesGenerated + venuesGenerated + localitiesGenerated
+  );
+  peliasLogger.info('[pass2_document_generator]   - %d streets', streetsGenerated);
+  peliasLogger.info('[pass2_document_generator]   - %d addresses', addressesGenerated);
+  peliasLogger.info('[pass2_document_generator]   - %d venues/POI (%d with nearest-street)', venuesGenerated, venuesWithNearestStreet);
+  peliasLogger.info('[pass2_document_generator]   - %d localities', localitiesGenerated);
+  peliasLogger.info('[pass2_document_generator] ========================================');
+  peliasLogger.info('[pass2_document_generator] Document generation complete!');
+  peliasLogger.info('[pass2_document_generator] Documents are now in pipeline for Elasticsearch indexing...');
+  peliasLogger.info('[pass2_document_generator] Check dbclient logs below for final indexing progress');
+  peliasLogger.info('[pass2_document_generator] ========================================');
+
+  // Clean up ALL LevelDB databases after successful generation.
+  // (importPipeline also removes stale databases before Pass 1, so a
+  // failed run can never leak old data into the next import.)
+  peliasLogger.info('[pass2_document_generator] Cleaning up LevelDB databases');
+  try {
+    for (const dbPath of [STREETS_DB_PATH, VENUES_DB_PATH, LOCALITIES_DB_PATH]) {
+      if (fs.existsSync(dbPath)) {
+        fs.rmSync(dbPath, { recursive: true, force: true });
+        peliasLogger.info('[pass2_document_generator] Cleaned up %s', dbPath);
+      }
+    }
+  } catch (err) {
+    peliasLogger.warn('[pass2_document_generator] Failed to clean up LevelDB: %s', err.message);
+  }
+}
+
+/**
+ * Add OSM admin hierarchy entries (stored as plain names) as document parents.
+ */
+function addOsmAdminParents(doc, osmAdmin) {
+  if (!osmAdmin) { return; }
+
+  const adminLevels = ['locality', 'localadmin', 'county', 'borough', 'neighbourhood', 'region', 'country'];
+  for (const level of adminLevels) {
+    if (osmAdmin[level] && osmAdmin[level].trim()) {
+      const name = osmAdmin[level].trim();
+      const osmId = 'osm:' + level + ':' + name.toLowerCase().replace(/\s+/g, '_');
+      doc.addParent(level, name, osmId, undefined);
+    }
+  }
+}
 
 /**
  * Generate a venue/POI document from LevelDB data.
@@ -597,12 +425,12 @@ function generateVenueDocument(venueData, streetIndex) {
     if (!venueData || !venueData.id || !venueData.layer) {
       return null;
     }
-    
-    if (!venueData.lat || !venueData.lon) {
+
+    if (!Number.isFinite(venueData.lat) || !Number.isFinite(venueData.lon)) {
       peliasLogger.debug('[pass2_document_generator] Skipping venue (no coordinates): %s', venueData.id);
       return null;
     }
-    
+
     // Determine effective street: from OSM data or via nearest-street lookup
     const hasOsmStreet = venueData.address_parts && venueData.address_parts.street && venueData.address_parts.street.trim();
     let effectiveStreet = hasOsmStreet ? venueData.address_parts.street.trim() : null;
@@ -615,21 +443,21 @@ function generateVenueDocument(venueData, streetIndex) {
         nearestStreetAssigned = true;
       }
     }
-    
+
     // Create venue document
     const venueDoc = new Document('openstreetmap', venueData.layer, venueData.id)
       .setCentroid({ lat: venueData.lat, lon: venueData.lon });
-    
+
     // Add name if available
     if (venueData.name && venueData.name.trim()) {
       venueDoc.setName('default', venueData.name.trim());
     }
-    
+
     // Add street name as name alias for better search (e.g., "Biedronka Sułowska")
     if (venueData.name_with_street && venueData.name_with_street.trim()) {
       venueDoc.setNameAlias('default', venueData.name_with_street.trim());
     }
-    
+
     // Add brand/operator as searchable name aliases when they differ from the primary name
     if (venueData.brand) {
       venueDoc.setNameAlias('default', venueData.brand);
@@ -637,39 +465,39 @@ function generateVenueDocument(venueData, streetIndex) {
     if (venueData.operator_name) {
       venueDoc.setNameAlias('default', venueData.operator_name);
     }
-    
+
     // Add type name to separate 'type' field (lower boost than name.default in queries)
     // so venues with the search term in their actual name rank higher than type-only matches
     if (venueData.osm_type_name && venueData.osm_type_name.trim()) {
       const typeName = venueData.osm_type_name.trim();
       venueDoc.setNameAlias('type', typeName);
-      
+
       if (effectiveStreet) {
         venueDoc.setNameAlias('type', `${typeName} ${effectiveStreet}`);
       }
     }
-    
+
     // Add all type aliases to 'type' field (e.g., "Dentysta", "Stomatolog")
     if (venueData.osm_type_aliases && Array.isArray(venueData.osm_type_aliases)) {
       venueData.osm_type_aliases.forEach(alias => {
         if (alias && alias.trim()) {
           const aliasName = alias.trim();
           venueDoc.setNameAlias('type', aliasName);
-          
+
           if (effectiveStreet) {
             venueDoc.setNameAlias('type', `${aliasName} ${effectiveStreet}`);
           }
         }
       });
     }
-    
+
     // Add original_name to addendum if this is an alternative name
     if (venueData.original_name && venueData.original_name.trim()) {
       venueDoc.setAddendum('osm', {
         original_name: venueData.original_name.trim()
       });
     }
-    
+
     // Set address_parts: use OSM data when available, otherwise nearest-street
     if (venueData.address_parts) {
       if (venueData.address_parts.street && venueData.address_parts.street.trim()) {
@@ -686,11 +514,11 @@ function generateVenueDocument(venueData, streetIndex) {
       venueDoc.setAddress('street', effectiveStreet);
       venueDoc._nearestStreetAssigned = true;
     }
-    
+
     // Copy FULL admin hierarchy from venue data (already from WOF in Pass 1!)
     if (venueData.parent) {
       const hierarchyLevels = ['locality', 'localadmin', 'county', 'borough', 'neighbourhood', 'region', 'country'];
-      
+
       for (const placetype of hierarchyLevels) {
         if (venueData.parent[placetype] && venueData.parent[placetype].trim()) {
           const name = venueData.parent[placetype].trim();
@@ -699,25 +527,25 @@ function generateVenueDocument(venueData, streetIndex) {
         }
       }
     }
-    
+
     // Restore categories from Pass 1
     if (venueData.categories && venueData.categories.length > 0) {
       venueData.categories.forEach(category => {
         venueDoc.addCategory(category);
       });
     }
-    
+
     // Restore popularity from Pass 1 (already computed!)
     if (venueData.popularity && venueData.popularity > 0) {
       venueDoc.setPopularity(venueData.popularity);
     }
-    
+
     // Restore type and type_name to addendum.osm
     // These will be automatically exposed in API response
     if (venueData.osm_type || venueData.osm_type_name) {
       // Get existing OSM addendum or create new one
       const existingOsmAddendum = venueDoc.getAddendum('osm') || {};
-      
+
       // Add type fields
       if (venueData.osm_type) {
         existingOsmAddendum.type = venueData.osm_type;
@@ -725,13 +553,13 @@ function generateVenueDocument(venueData, streetIndex) {
       if (venueData.osm_type_name) {
         existingOsmAddendum.type_name = venueData.osm_type_name;
       }
-      
+
       // Set back to document
       venueDoc.setAddendum('osm', existingOsmAddendum);
     }
-    
+
     return venueDoc;
-    
+
   } catch (err) {
     peliasLogger.error('[pass2_document_generator] Error generating venue document:', err);
     return null;
@@ -747,27 +575,27 @@ function generateLocalityDocument(localityData) {
     if (!localityData || !localityData.id) {
       return null;
     }
-    
-    if (!localityData.lat || !localityData.lon) {
+
+    if (!Number.isFinite(localityData.lat) || !Number.isFinite(localityData.lon)) {
       peliasLogger.debug('[pass2_document_generator] Skipping locality (no coordinates): %s', localityData.id);
       return null;
     }
-    
+
     // Create locality document (always layer='locality')
     const localityDoc = new Document('openstreetmap', 'locality', localityData.id)
       .setCentroid({ lat: localityData.lat, lon: localityData.lon });
-    
+
     // Add name if available
     if (localityData.name && localityData.name.trim()) {
       localityDoc.setName('default', localityData.name.trim());
     }
-    
+
     // Copy admin hierarchy from locality data (already from WOF in Pass 1!)
     if (localityData.parent) {
       // For localities, we don't want to add 'locality' level from parent
       // as the locality itself IS the locality
       const hierarchyLevels = ['localadmin', 'county', 'borough', 'region', 'country'];
-      
+
       for (const placetype of hierarchyLevels) {
         if (localityData.parent[placetype] && localityData.parent[placetype].trim()) {
           const name = localityData.parent[placetype].trim();
@@ -776,7 +604,7 @@ function generateLocalityDocument(localityData) {
         }
       }
     }
-    
+
     // Add OSM admin data if available
     if (localityData.osmAdmin) {
       for (const [level, name] of Object.entries(localityData.osmAdmin)) {
@@ -786,17 +614,16 @@ function generateLocalityDocument(localityData) {
         }
       }
     }
-    
+
     // Add postal code if available
     if (localityData.postalcode && localityData.postalcode.trim()) {
       localityDoc.setAddress('zip', localityData.postalcode.trim());
     }
-    
+
     return localityDoc;
-    
+
   } catch (err) {
     peliasLogger.error('[pass2_document_generator] Error generating locality document:', err);
     return null;
   }
 }
-

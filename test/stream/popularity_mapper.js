@@ -200,14 +200,32 @@ module.exports.tests.railway_station = function (test, common) {
 };
 
 // ===================== do not map non-venue docs ======================
+// note: this fork DOES map street/locality/address layers (custom ranking),
+// so use a layer outside that list to verify pass-through behaviour.
 
 module.exports.tests.nonvenue = function (test, common) {
-  var doc = new Document('osm', 'street', 1);
+  var doc = new Document('osm', 'county', 1);
   doc.setMeta('tags', { 'importance': 'international' });
   test('does not map - non-venue', t => {
     var stream = mapper();
     stream.pipe(through.obj((doc, enc, next) => {
       t.false(doc.getPopularity(), 'no mapping performed');
+      t.end(); // test will fail if not called (or called twice).
+      next();
+    }));
+    stream.write(doc);
+  });
+};
+
+// ===================== maps street docs (custom ranking) ======================
+
+module.exports.tests.street = function (test, common) {
+  var doc = new Document('osm', 'street', 1);
+  doc.setMeta('tags', {});
+  test('maps - street base popularity', t => {
+    var stream = mapper();
+    stream.pipe(through.obj((doc, enc, next) => {
+      t.equal(doc.getPopularity(), 5000, 'street base popularity');
       t.end(); // test will fail if not called (or called twice).
       next();
     }));

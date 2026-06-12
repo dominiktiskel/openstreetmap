@@ -6,7 +6,9 @@ var logger = require('pelias-logger').get('openstreetmap');
 
 function createCombinedStream(){
   var fullStream = combinedStream.create();
-  var defaultPath= require('pelias-config').generate().imports.openstreetmap;
+  // generate config WITH schema so Joi defaults apply
+  // (e.g. per-entry importVenues defaults to true)
+  var defaultPath= require('pelias-config').generate(require('../schema')).imports.openstreetmap;
 
   defaultPath.import.forEach(function( importObject){
     var conf = {

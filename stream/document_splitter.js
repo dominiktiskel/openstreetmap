@@ -11,7 +11,7 @@
  * 
  * This completely eliminates ES client reuse issues!
  * 
- * @version 2.8.2
+ * @version 2.10.0
  */
 
 const through = require('through2');
@@ -95,37 +95,40 @@ module.exports = function() {
         toVenueCollector
       );
       
-      // Wait for all collectors to truly close via EventEmitter
+      // Wait for all collectors to truly close via EventEmitter.
+      // Each collector is counted AT MOST ONCE, even if it emits both
+      // 'closed' and 'error' - otherwise done() could fire prematurely.
       let closedCount = 0;
       const totalCollectors = 3;
+      const settled = new Set();
+      let firstError = null;
       
-      const onClosed = (collectorName) => {
-        peliasLogger.info('[document_splitter] %s closed', collectorName);
+      const settle = (collectorName, err) => {
+        if (settled.has(collectorName)) { return; }
+        settled.add(collectorName);
+        
+        if (err) {
+          peliasLogger.error('[document_splitter] Error closing %s:', collectorName, err);
+          if (!firstError) { firstError = err; }
+        } else {
+          peliasLogger.info('[document_splitter] %s closed', collectorName);
+        }
+        
         closedCount++;
         if (closedCount === totalCollectors) {
           peliasLogger.info('[document_splitter] All collectors closed');
-          done();
+          done(firstError);
         }
       };
       
-      // Listen for 'closed' events from each collector
-      streetCollector.events.once('closed', () => onClosed('Street collector'));
-      localityCollector.events.once('closed', () => onClosed('Locality collector'));
-      venueCollector.events.once('closed', () => onClosed('Venue collector'));
+      // Listen for 'closed' and 'error' events from each collector
+      streetCollector.events.once('closed', () => settle('Street collector'));
+      localityCollector.events.once('closed', () => settle('Locality collector'));
+      venueCollector.events.once('closed', () => settle('Venue collector'));
       
-      // Handle errors
-      const onError = (err, collectorName) => {
-        peliasLogger.error('[document_splitter] Error closing %s:', collectorName, err);
-        // Still count it as closed to not block forever
-        closedCount++;
-        if (closedCount === totalCollectors) {
-          done(err);
-        }
-      };
-      
-      streetCollector.events.once('error', (err) => onError(err, 'Street collector'));
-      localityCollector.events.once('error', (err) => onError(err, 'Locality collector'));
-      venueCollector.events.once('error', (err) => onError(err, 'Venue collector'));
+      streetCollector.events.once('error', (err) => settle('Street collector', err));
+      localityCollector.events.once('error', (err) => settle('Locality collector', err));
+      venueCollector.events.once('error', (err) => settle('Venue collector', err));
       
       // Initiate closing - this will trigger the flush in each collector
       peliasLogger.info('[document_splitter] Initiating collector shutdown...');

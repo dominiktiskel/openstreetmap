@@ -21,8 +21,7 @@ module.exports = Joi.object().keys({
       download: Joi.array().items(Joi.object().keys({
         sourceURL: Joi.string()
       }).requiredKeys('sourceURL').unknown(true)),
-      deduplicate: Joi.boolean(),
-      preferOsmAdmin: Joi.boolean().default(true).truthy('yes').falsy('no').insensitive(true)
+      deduplicate: Joi.boolean()
     }).requiredKeys('datapath', 'leveldbpath', 'import').unknown(true)
   }).requiredKeys('openstreetmap').unknown(true)
 }).requiredKeys('imports').unknown(true);
