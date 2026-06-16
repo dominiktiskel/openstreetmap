@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build and push tiskel/openstreetmap Docker image (multi-platform)
-# Usage: ./build.sh [version] [--no-push] [--no-test] [--amd64-only] [--arm64-only]
+# Build and push tiskel/openstreetmap Docker image
+# Usage: ./build.sh [version] [--no-push] [--no-test] [--multi] [--arm64-only]
 # Example: ./build.sh v2.0.0
-# Example: ./build.sh v2.0.0 --amd64-only
+# Example: ./build.sh v2.0.0 --multi
 
 set -euo pipefail
 
@@ -12,7 +12,7 @@ BUILDER="pelias-multiarch"
 VERSION="latest"
 NO_PUSH=false
 NO_TEST=false
-AMD64_ONLY=false
+MULTI=false
 ARM64_ONLY=false
 
 # Parse arguments
@@ -20,11 +20,11 @@ for arg in "$@"; do
     case "$arg" in
         --no-push)    NO_PUSH=true ;;
         --no-test)    NO_TEST=true ;;
-        --amd64-only) AMD64_ONLY=true ;;
+        --multi)      MULTI=true ;;
         --arm64-only) ARM64_ONLY=true ;;
         -*)
             echo "Unknown option: $arg"
-            echo "Usage: ./build.sh [version] [--no-push] [--no-test] [--amd64-only] [--arm64-only]"
+            echo "Usage: ./build.sh [version] [--no-push] [--no-test] [--multi] [--arm64-only]"
             exit 1
             ;;
         *)  VERSION="$arg" ;;
@@ -33,12 +33,12 @@ done
 
 TAG="${IMAGE}:${VERSION}"
 
-if [ "$AMD64_ONLY" = true ]; then
-    PLATFORMS="linux/amd64"
+if [ "$MULTI" = true ]; then
+    PLATFORMS="linux/amd64,linux/arm64"
 elif [ "$ARM64_ONLY" = true ]; then
     PLATFORMS="linux/arm64"
 else
-    PLATFORMS="linux/amd64,linux/arm64"
+    PLATFORMS="linux/amd64"
 fi
 
 # Build context = directory containing this script
@@ -59,9 +59,9 @@ if ! docker ps > /dev/null 2>&1; then
     exit 1
 fi
 
-MULTI_PLATFORM=true
-if [ "$AMD64_ONLY" = true ] || [ "$ARM64_ONLY" = true ]; then
-    MULTI_PLATFORM=false
+MULTI_PLATFORM=false
+if [ "$MULTI" = true ]; then
+    MULTI_PLATFORM=true
 fi
 
 # ── Ensure multi-platform builder ─────────────────────────────────────────────
