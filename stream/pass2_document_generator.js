@@ -124,7 +124,11 @@ async function openLevelDbWithRetry(dbPath, label) {
       peliasLogger.info('[pass2_document_generator] %s opened successfully', label);
       return db;
     } catch (err) {
-      if (err.code === 'LEVEL_LOCKED' && retries < MAX_RETRIES - 1) {
+      // abstract-level rejects a failed open() with code LEVEL_DATABASE_NOT_OPEN
+      // and nests the real reason (the file lock held by a Pass 1 collector that
+      // is still releasing) in err.cause.code === 'LEVEL_LOCKED'. Check both.
+      const isLocked = err.code === 'LEVEL_LOCKED' || _.get(err, 'cause.code') === 'LEVEL_LOCKED';
+      if (isLocked && retries < MAX_RETRIES - 1) {
         retries++;
         const waitTime = Math.min(1000 * retries, 10000);  // backoff, max 10s
         peliasLogger.warn('[pass2_document_generator] %s locked, retry %d/%d in %dms...', label, retries, MAX_RETRIES, waitTime);
