@@ -11,7 +11,7 @@ ENV WORKDIR=/code/pelias/openstreetmap
 WORKDIR ${WORKDIR}
 
 COPY ./package.json ${WORKDIR}
-RUN npm install
+RUN npm install --allow-git=all --dangerously-allow-all-scripts
 
 ADD . ${WORKDIR}
 

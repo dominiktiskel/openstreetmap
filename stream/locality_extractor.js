@@ -6,7 +6,7 @@
  * 
  * Detection Logic:
  * - PRIMARY: place=city|town|village
- * - SECONDARY: boundary=administrative with admin_level=6,7,8 (Polish localities)
+ * - SECONDARY: boundary=administrative with admin_level=6,7,8, only for Poland
  * 
  * This runs AFTER address_extractor and BEFORE document_splitter,
  * ensuring localities are routed to locality_collector instead of venue_collector.
@@ -43,10 +43,9 @@ module.exports = function(){
           detectionMethod = `place=${placeTag}`;
         }
         
-        // SECONDARY: Check boundary + admin_level (only if no place tag)
-        // This handles cases like cities with county rights (Wrocław, etc.)
-        // where admin_level may be 6 instead of the standard 8
-        if (!isLocality && tags.boundary === 'administrative') {
+        // SECONDARY: Polish admin levels only. In Ukraine 6 is a raion and 7 is a hromada.
+        // place=city|town|village above stays for every country.
+        if (!isLocality && tags.boundary === 'administrative' && doc.getMeta('source_country_code') === 'PL') {
           const adminLevel = parseInt(tags.admin_level);
           
           // admin_level 6,7,8 for Polish localities
