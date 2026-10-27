@@ -154,23 +154,37 @@ function slug(name) {
 }
 
 function createIntersectionDocument(item) {
-  const labels = intersectionLabels(item.a, item.b);
-  const id = [
-    'intersection',
-    item.lat.toFixed(6),
-    item.lon.toFixed(6),
-    slug(labels.street),
-    slug(labels.crossStreet)
-  ].join('_');
+  try {
+    const labels = intersectionLabels(item.a, item.b);
+    if (!labels.street || !labels.crossStreet || !labels.display) return null;
 
-  const doc = new Document('openstreetmap', 'intersection', id)
-    .setCentroid({ lat: item.lat, lon: item.lon })
-    .setName('default', labels.display)
-    .setAddress('street', labels.street)
-    .setAddress('cross_street', labels.crossStreet);
+    const id = [
+      'intersection',
+      item.lat.toFixed(6),
+      item.lon.toFixed(6),
+      slug(labels.street),
+      slug(labels.crossStreet)
+    ].join('_');
 
-  labels.aliases.forEach((alias) => doc.setNameAlias('default', alias));
-  return doc;
+    // Setters return undefined when the value is empty after cleanup, so they
+    // must not be chained. One bad OSM name must not abort the whole country.
+    const doc = new Document('openstreetmap', 'intersection', id);
+    if (!doc.setCentroid({ lat: item.lat, lon: item.lon })) return null;
+    if (!doc.setName('default', labels.display)) return null;
+    if (!doc.setAddress('street', labels.street)) return null;
+    if (!doc.setAddress('cross_street', labels.crossStreet)) return null;
+
+    labels.aliases.forEach((alias) => {
+      try {
+        doc.setNameAlias('default', alias);
+      } catch (aliasErr) {
+        // skip this alias
+      }
+    });
+    return doc;
+  } catch (err) {
+    return null;
+  }
 }
 
 function readIntersections(file, leveldb) {
@@ -245,25 +259,51 @@ async function importFromConfig() {
     return { skipped: true, count: 0 };
   }
 
+  const onlyFiles = String(process.env.INTERSECTIONS_FILES || '')
+    .split(',')
+    .map((name) => name.trim())
+    .filter(Boolean);
+  let selected = wanted;
+  if (onlyFiles.length) {
+    selected = wanted.filter((entry) => onlyFiles.indexOf(entry.filename) !== -1);
+  }
+  if (!selected.length) {
+    throw new Error('no intersection files matched INTERSECTIONS_FILES');
+  }
+
   const datapath = peliasConfig.imports.openstreetmap.datapath;
   const leveldbBase = peliasConfig.imports.openstreetmap.leveldbpath;
   let count = 0;
+  let skipped = 0;
 
-  for (let i = 0; i < wanted.length; i++) {
-    const file = path.join(datapath, wanted[i].filename);
+  for (let i = 0; i < selected.length; i++) {
+    const file = path.join(datapath, selected[i].filename);
     if (!fs.existsSync(file)) {
       throw new Error('intersection import file not found: ' + file);
     }
     const leveldb = path.join(leveldbBase, 'intersection-nodes-' + i);
     const found = await readIntersections(file, leveldb);
-    peliasLogger.info('[intersections] indexing %d documents from %s', found.length, path.basename(file));
-    if (found.length) {
-      await indexDocuments(found.map(createIntersectionDocument));
-      count += found.length;
+    const docs = [];
+    let fileSkipped = 0;
+    found.forEach((item) => {
+      const doc = createIntersectionDocument(item);
+      if (doc) docs.push(doc);
+      else fileSkipped++;
+    });
+    skipped += fileSkipped;
+    peliasLogger.info(
+      '[intersections] indexing %d documents from %s (%d skipped)',
+      docs.length,
+      path.basename(file),
+      fileSkipped
+    );
+    if (docs.length) {
+      await indexDocuments(docs);
+      count += docs.length;
     }
   }
 
-  return { skipped: false, count: count };
+  return { skipped: false, count: count, skippedDocuments: skipped };
 }
 
 module.exports = {

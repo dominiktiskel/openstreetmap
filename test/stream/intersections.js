@@ -58,6 +58,17 @@ module.exports.tests.geometry = (test) => {
     t.ok(aliases.indexOf('53rd & Lex') !== -1);
     t.end();
   });
+
+  test('a street name that is only a URL is skipped', (t) => {
+    const doc = intersections.createIntersectionDocument({
+      lat: 40.1,
+      lon: -3.7,
+      a: 'http://example.com',
+      b: 'Calle Mayor'
+    });
+    t.equal(doc, null);
+    t.end();
+  });
 };
 
 module.exports.all = (tape) => {
