@@ -40,6 +40,7 @@ const _ = require('lodash');
 const fs = require('fs');
 const Document = require('pelias-model').Document;
 const { STREETS_DB_PATH, VENUES_DB_PATH, LOCALITIES_DB_PATH } = require('../util/leveldb_paths');
+const { emitsAddressDocument } = require('./openaddresses_house_numbers');
 
 // Configuration
 const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
@@ -323,9 +324,12 @@ async function* generateAllDocuments() {
         // Generate individual address documents for each house number (when present)
         if (aggregate.numbers && aggregate.numbers.length > 0) {
           for (const houseNumItem of aggregate.numbers) {
+            if (!emitsAddressDocument(houseNumItem)) continue;
             let houseNumber;
             try {
               // Support old format (string) and new format ({num, lat, lon, zip})
+              // listOnly numbers (OpenAddresses) stay in house_numbers but do not
+              // become a second address document; the OA importer owns those points.
               const isObj = typeof houseNumItem === 'object' && houseNumItem !== null;
               houseNumber = isObj ? houseNumItem.num : houseNumItem;
               const addrLat = (isObj && Number.isFinite(houseNumItem.lat)) ? houseNumItem.lat : avgLat;

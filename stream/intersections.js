@@ -1,0 +1,249 @@
+/**
+ * Named-street intersections.
+ *
+ * A second PBF read (way nodes enabled) finds coordinates shared by two
+ * differently named highways. Each pair becomes one layer=intersection
+ * document. Pelias already searches "Street A & Street B" for queries like
+ * "Lex and 53rd"; short aliases cover that form.
+ *
+ * Enabled per import entry with importIntersections: true.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { Readable, pipeline } = require('stream');
+const peliasLogger = require('pelias-logger').get('openstreetmap');
+const Document = require('pelias-model').Document;
+
+const HIGHWAY_VALUES = new Set([
+  'residential', 'tertiary', 'secondary', 'primary',
+  'living_street', 'unclassified', 'pedestrian', 'service', 'road'
+]);
+
+const HIGHWAY_TAGS = [
+  'highway~residential+name',
+  'highway~tertiary+name',
+  'highway~secondary+name',
+  'highway~primary+name',
+  'highway~living_street+name',
+  'highway~unclassified+name',
+  'highway~pedestrian+name',
+  'highway~service+name',
+  'highway~road+name'
+];
+
+const AVENUE_ALIASES = {
+  'lexington avenue': 'Lex'
+};
+
+function cleanStreetName(name) {
+  if (!name) return '';
+  return String(name).split(';')[0].trim();
+}
+
+function shortStreetName(name) {
+  const cleaned = cleanStreetName(name);
+  if (!cleaned) return null;
+  const avenue = AVENUE_ALIASES[cleaned.toLowerCase()];
+  if (avenue) return avenue;
+  const ordinal = cleaned.match(/^(?:(?:east|west|north|south)\s+)?(\d+)(st|nd|rd|th)\s+street$/i);
+  if (!ordinal) return null;
+  return ordinal[1] + ordinal[2].toLowerCase();
+}
+
+function intersectionLabels(streetA, streetB) {
+  const pair = [cleanStreetName(streetA), cleanStreetName(streetB)].sort((a, b) => a.localeCompare(b));
+  const display = pair[0] + ' & ' + pair[1];
+  const aliases = new Set();
+  const add = (value) => {
+    if (value && value !== display) aliases.add(value);
+  };
+
+  add(pair[1] + ' & ' + pair[0]);
+
+  const short = pair.map(shortStreetName);
+  if (short[0]) {
+    add(short[0] + ' & ' + pair[1]);
+    add(pair[1] + ' & ' + short[0]);
+  }
+  if (short[1]) {
+    add(pair[0] + ' & ' + short[1]);
+    add(short[1] + ' & ' + pair[0]);
+  }
+  if (short[0] && short[1]) {
+    add(short[0] + ' & ' + short[1]);
+    add(short[1] + ' & ' + short[0]);
+  }
+
+  return { street: pair[0], crossStreet: pair[1], display: display, aliases: Array.from(aliases) };
+}
+
+function coordKey(lat, lon) {
+  const latitude = Number(lat);
+  const longitude = Number(lon);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return '';
+  if (latitude === 0 && longitude === 0) return '';
+  return latitude.toFixed(6) + ',' + longitude.toFixed(6);
+}
+
+function rememberNode(nodeMap, lat, lon, streetName) {
+  const key = coordKey(lat, lon);
+  const name = cleanStreetName(streetName);
+  if (!key || !name) return;
+  let names = nodeMap.get(key);
+  if (!names) {
+    names = new Set();
+    nodeMap.set(key, names);
+  }
+  names.add(name);
+}
+
+function ingestWay(nodeMap, way) {
+  if (!way || way.type !== 'way' || !way.tags) return;
+  if (!HIGHWAY_VALUES.has(way.tags.highway)) return;
+  const name = cleanStreetName(way.tags.name);
+  if (!name || !Array.isArray(way.nodes)) return;
+  way.nodes.forEach((node) => rememberNode(nodeMap, node.lat, node.lon, name));
+}
+
+function buildIntersections(nodeMap) {
+  const found = [];
+  nodeMap.forEach((names, key) => {
+    if (names.size < 2) return;
+    const parts = key.split(',');
+    const lat = Number(parts[0]);
+    const lon = Number(parts[1]);
+    const list = Array.from(names).sort((a, b) => a.localeCompare(b));
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        found.push({ lat: lat, lon: lon, a: list[i], b: list[j] });
+      }
+    }
+  });
+  return found;
+}
+
+function slug(name) {
+  return cleanStreetName(name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40);
+}
+
+function createIntersectionDocument(item) {
+  const labels = intersectionLabels(item.a, item.b);
+  const id = [
+    'intersection',
+    item.lat.toFixed(6),
+    item.lon.toFixed(6),
+    slug(labels.street),
+    slug(labels.crossStreet)
+  ].join('_');
+
+  const doc = new Document('openstreetmap', 'intersection', id)
+    .setCentroid({ lat: item.lat, lon: item.lon })
+    .setName('default', labels.display)
+    .setAddress('street', labels.street)
+    .setAddress('cross_street', labels.crossStreet);
+
+  labels.aliases.forEach((alias) => doc.setNameAlias('default', alias));
+  return doc;
+}
+
+function readIntersections(file, leveldb) {
+  const pbf2json = require('pbf2json');
+  fs.mkdirSync(leveldb, { recursive: true });
+  const nodeMap = new Map();
+  let ways = 0;
+
+  return new Promise((resolve, reject) => {
+    const stream = pbf2json.createReadStream({
+      file: file,
+      leveldb: leveldb,
+      waynodes: true,
+      tags: HIGHWAY_TAGS
+    });
+    stream.on('data', (way) => {
+      ways++;
+      ingestWay(nodeMap, way);
+    });
+    stream.on('error', reject);
+    stream.on('end', () => {
+      const intersections = buildIntersections(nodeMap);
+      peliasLogger.info(
+        '[intersections] %s: %d named ways, %d intersections',
+        path.basename(file),
+        ways,
+        intersections.length
+      );
+      resolve(intersections);
+    });
+  });
+}
+
+function indexDocuments(docs) {
+  // pelias-dbclient caches the esclient config object and marks it used.
+  // Pass 2 already created a client in this process, so load a fresh one.
+  const clientPath = require.resolve('pelias-dbclient/src/client');
+  delete require.cache[clientPath];
+
+  const adminLookup = require('pelias-wof-admin-lookup').create;
+  const blacklist = require('pelias-blacklist-stream');
+  const categoryMapper = require('./category_mapper');
+  const popularityMapper = require('./popularity_mapper');
+  const dbMapper = require('pelias-model').createDocumentMapperStream;
+  const elasticsearch = require('pelias-dbclient');
+  const categoryDefaults = require('../config/category_map');
+
+  return new Promise((resolve, reject) => {
+    pipeline(
+      Readable.from(docs, { objectMode: true }),
+      adminLookup(),
+      blacklist(),
+      categoryMapper(categoryDefaults),
+      popularityMapper(),
+      dbMapper(),
+      elasticsearch({ name: 'openstreetmap' }),
+      (err) => {
+        if (err) reject(err);
+        else resolve();
+      }
+    );
+  });
+}
+
+async function importFromConfig() {
+  const peliasConfig = require('pelias-config').generate();
+  const _ = require('lodash');
+  const entries = _.get(peliasConfig, 'imports.openstreetmap.import', []);
+  const wanted = entries.filter((entry) => entry && entry.importIntersections);
+  if (!wanted.length) {
+    peliasLogger.info('[intersections] importIntersections is not set, skipping');
+    return { skipped: true, count: 0 };
+  }
+
+  const datapath = peliasConfig.imports.openstreetmap.datapath;
+  const leveldbBase = peliasConfig.imports.openstreetmap.leveldbpath;
+  const docs = [];
+
+  for (let i = 0; i < wanted.length; i++) {
+    const file = path.join(datapath, wanted[i].filename);
+    if (!fs.existsSync(file)) {
+      throw new Error('intersection import file not found: ' + file);
+    }
+    const leveldb = path.join(leveldbBase, 'intersection-nodes-' + i);
+    const found = await readIntersections(file, leveldb);
+    found.forEach((item) => docs.push(createIntersectionDocument(item)));
+  }
+
+  peliasLogger.info('[intersections] indexing %d documents', docs.length);
+  if (!docs.length) return { skipped: false, count: 0 };
+  await indexDocuments(docs);
+  return { skipped: false, count: docs.length };
+}
+
+module.exports = {
+  shortStreetName: shortStreetName,
+  intersectionLabels: intersectionLabels,
+  ingestWay: ingestWay,
+  buildIntersections: buildIntersections,
+  createIntersectionDocument: createIntersectionDocument,
+  importFromConfig: importFromConfig
+};

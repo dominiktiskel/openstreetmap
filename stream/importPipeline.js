@@ -51,6 +51,8 @@ streams.dbMapper = require('pelias-model').createDocumentMapperStream;
 streams.elasticsearch = require('pelias-dbclient');
 
 var aggregateHouseNumbers = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
+var mergeOpenAddressesFromConfig = require('./openaddresses_house_numbers').mergeFromConfig;
+var importIntersectionsFromConfig = require('./intersections').importFromConfig;
 
 // Remove stale LevelDB databases from a previous (possibly failed) run.
 // Pass 1 collectors MERGE into existing databases, so leftovers from an
@@ -104,7 +106,7 @@ streams.importPass1 = function(callback){
 };
 
 // Pass 2: Read LevelDB and generate documents for Elasticsearch
-streams.importPass2 = function(){
+streams.importPass2 = function(done){
   peliasLogger.info('[importPipeline] ========================================');
   peliasLogger.info('[importPipeline] PASS 2: Generating documents from LevelDB');
   peliasLogger.info('[importPipeline] ========================================');
@@ -123,12 +125,23 @@ streams.importPass2 = function(){
       if (err) {
         peliasLogger.error('[importPipeline] Pass 2 failed:', err);
         process.exitCode = 1;
+        if (done) done(err);
       } else {
         peliasLogger.info('[importPipeline] Pass 2 complete - all documents sent to Elasticsearch');
+        if (done) done();
       }
     }
   );
 };
+
+function finishWithIntersections() {
+  importIntersectionsFromConfig().then(function() {
+    peliasLogger.info('[importPipeline] Intersection import complete');
+  }).catch(function(intersectionErr) {
+    peliasLogger.error('[importPipeline] Intersection import failed:', intersectionErr);
+    process.exit(1);
+  });
+}
 
 // Single-pass import (aggregateHouseNumbers=false):
 // same streams as Pass 1, but documents go straight to Elasticsearch
@@ -161,6 +174,7 @@ streams.importSinglePass = function(){
         process.exitCode = 1;
       } else {
         peliasLogger.info('[importPipeline] Single-pass import complete');
+        finishWithIntersections();
       }
     }
   );
@@ -175,8 +189,17 @@ streams.import = function(){
         peliasLogger.error('[importPipeline] Pass 1 failed:', err);
         process.exit(1);
       }
-      // Start Pass 2 after Pass 1 completes
-      streams.importPass2();
+      // OA numbers join the same street aggregation before documents are built.
+      // Projects without imports.openaddresses are unchanged.
+      mergeOpenAddressesFromConfig().then(function() {
+        streams.importPass2(function(pass2Err) {
+          if (pass2Err) process.exit(1);
+          finishWithIntersections();
+        });
+      }).catch(function(mergeErr) {
+        peliasLogger.error('[importPipeline] OpenAddresses house number merge failed:', mergeErr);
+        process.exit(1);
+      });
     });
   } else {
     // Single-pass import without aggregation - documents flow directly to ES
