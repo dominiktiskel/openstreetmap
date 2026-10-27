@@ -86,39 +86,65 @@ function coordKey(lat, lon) {
   return latitude.toFixed(6) + ',' + longitude.toFixed(6);
 }
 
-function rememberNode(nodeMap, lat, lon, streetName) {
+// One V8 Map cannot hold more than 2^24 entries. Great Britain alone has
+// more named-street nodes than that, so nodes are split across shards.
+const SHARD_COUNT = 64;
+
+function createNodeStore() {
+  const shards = [];
+  for (let i = 0; i < SHARD_COUNT; i++) shards.push(new Map());
+  return { shards: shards };
+}
+
+function shardIndex(key) {
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    hash = (hash * 33 + key.charCodeAt(i)) >>> 0;
+  }
+  return hash % SHARD_COUNT;
+}
+
+function rememberNode(store, lat, lon, streetName) {
   const key = coordKey(lat, lon);
   const name = cleanStreetName(streetName);
   if (!key || !name) return;
-  let names = nodeMap.get(key);
-  if (!names) {
-    names = new Set();
-    nodeMap.set(key, names);
+  const nodeMap = store.shards[shardIndex(key)];
+  const existing = nodeMap.get(key);
+  if (!existing) {
+    nodeMap.set(key, name);
+    return;
   }
-  names.add(name);
+  if (typeof existing === 'string') {
+    if (existing !== name) nodeMap.set(key, new Set([existing, name]));
+    return;
+  }
+  existing.add(name);
 }
 
-function ingestWay(nodeMap, way) {
+function ingestWay(store, way) {
   if (!way || way.type !== 'way' || !way.tags) return;
   if (!HIGHWAY_VALUES.has(way.tags.highway)) return;
   const name = cleanStreetName(way.tags.name);
   if (!name || !Array.isArray(way.nodes)) return;
-  way.nodes.forEach((node) => rememberNode(nodeMap, node.lat, node.lon, name));
+  way.nodes.forEach((node) => rememberNode(store, node.lat, node.lon, name));
 }
 
-function buildIntersections(nodeMap) {
+function buildIntersections(store) {
   const found = [];
-  nodeMap.forEach((names, key) => {
-    if (names.size < 2) return;
-    const parts = key.split(',');
-    const lat = Number(parts[0]);
-    const lon = Number(parts[1]);
-    const list = Array.from(names).sort((a, b) => a.localeCompare(b));
-    for (let i = 0; i < list.length; i++) {
-      for (let j = i + 1; j < list.length; j++) {
-        found.push({ lat: lat, lon: lon, a: list[i], b: list[j] });
+  store.shards.forEach((nodeMap) => {
+    nodeMap.forEach((names, key) => {
+      const list = typeof names === 'string' ? [names] : Array.from(names);
+      if (list.length < 2) return;
+      list.sort((a, b) => a.localeCompare(b));
+      const parts = key.split(',');
+      const lat = Number(parts[0]);
+      const lon = Number(parts[1]);
+      for (let i = 0; i < list.length; i++) {
+        for (let j = i + 1; j < list.length; j++) {
+          found.push({ lat: lat, lon: lon, a: list[i], b: list[j] });
+        }
       }
-    }
+    });
   });
   return found;
 }
@@ -150,7 +176,7 @@ function createIntersectionDocument(item) {
 function readIntersections(file, leveldb) {
   const pbf2json = require('pbf2json');
   fs.mkdirSync(leveldb, { recursive: true });
-  const nodeMap = new Map();
+  const nodeStore = createNodeStore();
   let ways = 0;
 
   return new Promise((resolve, reject) => {
@@ -162,11 +188,11 @@ function readIntersections(file, leveldb) {
     });
     stream.on('data', (way) => {
       ways++;
-      ingestWay(nodeMap, way);
+      ingestWay(nodeStore, way);
     });
     stream.on('error', reject);
     stream.on('end', () => {
-      const intersections = buildIntersections(nodeMap);
+      const intersections = buildIntersections(nodeStore);
       peliasLogger.info(
         '[intersections] %s: %d named ways, %d intersections',
         path.basename(file),
@@ -221,7 +247,7 @@ async function importFromConfig() {
 
   const datapath = peliasConfig.imports.openstreetmap.datapath;
   const leveldbBase = peliasConfig.imports.openstreetmap.leveldbpath;
-  const docs = [];
+  let count = 0;
 
   for (let i = 0; i < wanted.length; i++) {
     const file = path.join(datapath, wanted[i].filename);
@@ -230,18 +256,20 @@ async function importFromConfig() {
     }
     const leveldb = path.join(leveldbBase, 'intersection-nodes-' + i);
     const found = await readIntersections(file, leveldb);
-    found.forEach((item) => docs.push(createIntersectionDocument(item)));
+    peliasLogger.info('[intersections] indexing %d documents from %s', found.length, path.basename(file));
+    if (found.length) {
+      await indexDocuments(found.map(createIntersectionDocument));
+      count += found.length;
+    }
   }
 
-  peliasLogger.info('[intersections] indexing %d documents', docs.length);
-  if (!docs.length) return { skipped: false, count: 0 };
-  await indexDocuments(docs);
-  return { skipped: false, count: docs.length };
+  return { skipped: false, count: count };
 }
 
 module.exports = {
   shortStreetName: shortStreetName,
   intersectionLabels: intersectionLabels,
+  createNodeStore: createNodeStore,
   ingestWay: ingestWay,
   buildIntersections: buildIntersections,
   createIntersectionDocument: createIntersectionDocument,

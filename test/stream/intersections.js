@@ -27,24 +27,24 @@ module.exports.tests.aliases = (test) => {
 
 module.exports.tests.geometry = (test) => {
   test('a shared node of two streets becomes one intersection document', (t) => {
-    const nodeMap = new Map();
-    intersections.ingestWay(nodeMap, {
+    const nodeStore = intersections.createNodeStore();
+    intersections.ingestWay(nodeStore, {
       type: 'way',
       tags: { highway: 'primary', name: 'Lexington Avenue' },
       nodes: [{ lat: 40.758125, lon: -73.971309 }, { lat: 40.760000, lon: -73.971309 }]
     });
-    intersections.ingestWay(nodeMap, {
+    intersections.ingestWay(nodeStore, {
       type: 'way',
       tags: { highway: 'residential', name: 'East 53rd Street' },
       nodes: [{ lat: 40.758125, lon: -73.971309 }, { lat: 40.758125, lon: -73.970000 }]
     });
-    intersections.ingestWay(nodeMap, {
+    intersections.ingestWay(nodeStore, {
       type: 'way',
       tags: { highway: 'residential', name: 'East 54th Street' },
       nodes: [{ lat: 40.759000, lon: -73.971309 }]
     });
 
-    const found = intersections.buildIntersections(nodeMap);
+    const found = intersections.buildIntersections(nodeStore);
     t.equal(found.length, 1);
     t.equal(found[0].lat, 40.758125);
     t.ok(found[0].a === 'East 53rd Street' || found[0].b === 'East 53rd Street');
