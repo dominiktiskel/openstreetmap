@@ -41,6 +41,7 @@ const fs = require('fs');
 const Document = require('pelias-model').Document;
 const { STREETS_DB_PATH, VENUES_DB_PATH, LOCALITIES_DB_PATH } = require('../util/leveldb_paths');
 const { emitsAddressDocument } = require('./openaddresses_house_numbers');
+const { collapseRepeatedPhrase, fitSourceId } = require('../util/bounded_source_id');
 
 // Configuration
 const ENABLE_AGGREGATION = _.get(peliasConfig, 'imports.openstreetmap.aggregateHouseNumbers', true);
@@ -177,6 +178,8 @@ async function* generateAllDocuments() {
   peliasLogger.info('[pass2_document_generator] ========================================');
 
   let streetsGenerated = 0;
+  let collapsedStreetNames = 0;
+  let truncatedIds = 0;
   let venuesGenerated = 0;
   let venuesWithNearestStreet = 0;
   let addressesGenerated = 0;
@@ -190,7 +193,7 @@ async function* generateAllDocuments() {
 
     for await (const [key, aggregate] of indexDb.iterator()) {
       if (!aggregate || !aggregate.centroid || aggregate.centroid.count === 0) continue;
-      const streetName = aggregate.streetName || key.split('|')[0];
+      const streetName = collapseRepeatedPhrase(aggregate.streetName || key.split('|')[0]);
       if (!streetName) continue;
 
       if (aggregate.numbers && Array.isArray(aggregate.numbers)) {
@@ -284,10 +287,14 @@ async function* generateAllDocuments() {
         }
 
         // Get street name
-        const streetName = aggregate.streetName || key.split('|')[0];
+        const rawStreetName = aggregate.streetName || key.split('|')[0];
+        const streetName = collapseRepeatedPhrase(rawStreetName);
         if (!streetName) {
           peliasLogger.debug('[pass2_document_generator] Skipping street (no name): %s', key);
           continue;
+        }
+        if (streetName !== String(rawStreetName).replace(/\s+/g, ' ').trim()) {
+          collapsedStreetNames++;
         }
 
         // Calculate average centroid
@@ -295,7 +302,9 @@ async function* generateAllDocuments() {
         const avgLon = aggregate.centroid.lon / aggregate.centroid.count;
 
         // Generate unique ID for street
-        const streetId = `street_${key.replace(/\|/g, '_')}`;
+        const fittedStreetId = fitSourceId('street', `street_${key.replace(/\|/g, '_')}`);
+        if (fittedStreetId.truncated) truncatedIds++;
+        const streetId = fittedStreetId.id;
 
         // Create street document
         const streetDoc = new Document('openstreetmap', 'street', streetId)
@@ -337,7 +346,12 @@ async function* generateAllDocuments() {
               // Per-address zip (v2.10.0) with fallback to street-level zip
               const addrZip = (isObj && houseNumItem.zip) ? houseNumItem.zip : streetZip;
 
-              const addressId = `address_${streetName.toLowerCase().replace(/\s+/g, '_')}_${houseNumber}_${addrLat.toFixed(6)}_${addrLon.toFixed(6)}`;
+              const fittedAddressId = fitSourceId(
+                'address',
+                `address_${streetName.toLowerCase().replace(/\s+/g, '_')}_${houseNumber}_${addrLat.toFixed(6)}_${addrLon.toFixed(6)}`
+              );
+              if (fittedAddressId.truncated) truncatedIds++;
+              const addressId = fittedAddressId.id;
 
               const addressDoc = new Document('openstreetmap', 'address', addressId)
                 .setName('default', `${streetName} ${houseNumber}`)
@@ -372,6 +386,13 @@ async function* generateAllDocuments() {
 
     await streetsDb.close();
     peliasLogger.info('[pass2_document_generator] Streets complete: %d street docs, %d address docs', streetsGenerated, addressesGenerated);
+    if (collapsedStreetNames || truncatedIds) {
+      peliasLogger.info(
+        '[pass2_document_generator] Normalized %d repeated street names, shortened %d ids to the 512-byte elasticsearch limit',
+        collapsedStreetNames,
+        truncatedIds
+      );
+    }
   }
 
   // Summary

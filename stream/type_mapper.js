@@ -14,7 +14,8 @@ const typeMaps = {
   'en': require('../config/type_map_en'),
   'de': require('../config/type_map_de'),
   'es': require('../config/type_map_es'),
-  'uk': require('../config/type_map_uk')
+  'uk': require('../config/type_map_uk'),
+  'bg': require('../config/type_map_bg')
 };
 
 // Load country to language mapping (fallback — uses WOF country name)
@@ -44,6 +45,7 @@ const isoLanguageMap = {
   'EE': 'et',
   'RU': 'ru',
   'UA': 'uk',
+  'BG': 'bg',
   'IL': 'he',
   'TR': 'tr',
   'JP': 'ja',
@@ -63,6 +65,7 @@ const FALLBACK_TYPE_DATA = {
   'pt': { type: 'other', type_name: 'Outro', type_aliases: [] },
   'nl': { type: 'other', type_name: 'Overig', type_aliases: [] },
   'uk': { type: 'other', type_name: 'Інше', type_aliases: [] },
+  'bg': { type: 'other', type_name: 'Други', type_aliases: [] },
 };
 
 module.exports = function() {

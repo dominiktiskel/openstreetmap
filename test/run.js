@@ -21,7 +21,8 @@ var tests = [
   require('./stream/openaddresses_house_numbers'),
   require('./stream/intersections'),
   require('./util/parseSemicolonDelimitedValues'),
-  require('./util/expandHouseNumberRanges')
+  require('./util/expandHouseNumberRanges'),
+  require('./util/bounded_source_id')
 ];
 
 tests.map(function(t) {
